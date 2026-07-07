@@ -149,6 +149,10 @@ Goal:
 
 Make Dr. Kaya's state affect whether and how actions are executed.
 
+Status:
+
+Complete for the first deterministic autonomy slice.
+
 Scope:
 
 - Stress.

@@ -7,6 +7,7 @@ import (
 	"unicode"
 
 	"kaya/internal/game"
+	"kaya/internal/kaya"
 )
 
 var (
@@ -27,6 +28,7 @@ type State struct {
 	LastMentionedItemID  game.ItemID
 	LastMentionedItemIDs []game.ItemID
 	ActiveLight          bool
+	Kaya                 kaya.State
 
 	ScheduledEvents []ScheduledEvent
 }
@@ -40,6 +42,7 @@ func NewState(currentRoomID game.RoomID) *State {
 		Items:           make(map[game.ItemID]Item),
 		Inventory:       make(map[game.ItemID]bool),
 		DiscoveredItems: make(map[game.ItemID]bool),
+		Kaya:            kaya.DefaultState(),
 	}
 }
 

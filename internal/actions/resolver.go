@@ -26,6 +26,10 @@ func (r Resolver) Resolve(in intent.Intent) game.ActionResult {
 		return failed("missing_world", "The connection is unstable. I cannot read the room state.")
 	}
 
+	if result, ok := r.autonomyResult(in); ok {
+		return result
+	}
+
 	var result game.ActionResult
 	switch in.Action {
 	case intent.ActionInspect:
@@ -163,7 +167,9 @@ func (r Resolver) moveThroughExit(direction string, exit world.Exit) game.Action
 	if err != nil {
 		return failed("move_failed", err.Error())
 	}
-	return makeResult("moved", 20, "I move "+direction+" into "+destination.Name+".", destination.Description)
+	result := makeResult("moved", 20, "I move "+direction+" into "+destination.Name+".", destination.Description)
+	result.Danger = roomEntryDanger(destination, r.state.ActiveLight)
+	return result
 }
 
 func (r Resolver) search(in intent.Intent) game.ActionResult {
@@ -425,6 +431,111 @@ func (r Resolver) answerItemLocation(in intent.Intent) game.ActionResult {
 	return makeResult("item_location_known", 1, "I found "+item.Name+" nearby.")
 }
 
+func (r Resolver) autonomyResult(in intent.Intent) (game.ActionResult, bool) {
+	danger := r.intentDanger(in)
+	decision := r.state.Kaya.CanAttempt(danger)
+	if !decision.Allowed {
+		return game.ActionResult{
+			Outcome:      "kaya_refused",
+			VisibleFacts: []game.Fact{{Text: decision.Reason}},
+			Danger:       game.DangerNone,
+		}, true
+	}
+	if decision.NeedsConfirmation {
+		return game.ActionResult{
+			Outcome:               "kaya_needs_confirmation",
+			VisibleFacts:          []game.Fact{{Text: decision.Reason}},
+			NeedsClarification:    true,
+			ClarificationQuestion: decision.Reason,
+			Danger:                game.DangerNone,
+		}, true
+	}
+	return game.ActionResult{}, false
+}
+
+func (r Resolver) intentDanger(in intent.Intent) game.DangerLevel {
+	switch in.Action {
+	case intent.ActionMove:
+		return r.moveDanger(in)
+	case intent.ActionSearch:
+		if isBodySearchTarget(in.Target) {
+			return game.DangerModerate
+		}
+	case intent.ActionTurnOff:
+		room, err := r.state.CurrentRoom()
+		if err == nil && room.NeedsLight() {
+			return game.DangerHigh
+		}
+	}
+	return game.DangerNone
+}
+
+func (r Resolver) moveDanger(in intent.Intent) game.DangerLevel {
+	direction := strings.TrimSpace(in.Direction)
+	if direction == "" {
+		direction = strings.TrimSpace(in.Target)
+	}
+	if direction == "" {
+		return game.DangerNone
+	}
+
+	room, err := r.state.CurrentRoom()
+	if err != nil {
+		return game.DangerNone
+	}
+
+	if isBackDirection(direction) && r.state.PreviousRoomID != "" {
+		for _, exit := range room.Exits {
+			if exit.To == r.state.PreviousRoomID {
+				return r.exitDanger(exit)
+			}
+		}
+	}
+
+	for _, exit := range room.Exits {
+		if world.MatchesTarget(direction, exit.Direction, nil) {
+			return r.exitDanger(exit)
+		}
+	}
+
+	return game.DangerNone
+}
+
+func (r Resolver) exitDanger(exit world.Exit) game.DangerLevel {
+	if exit.Door != "" {
+		door, ok := r.state.Doors[exit.Door]
+		if !ok || !door.IsPassable() {
+			return game.DangerNone
+		}
+	}
+
+	destination, ok := r.state.Rooms[exit.To]
+	if !ok {
+		return game.DangerNone
+	}
+	return roomEntryDanger(destination, r.state.ActiveLight)
+}
+
+func roomEntryDanger(room world.Room, hasLight bool) game.DangerLevel {
+	if hasLight {
+		return game.DangerNone
+	}
+	if room.Visibility == world.VisibilityPitchBlack {
+		return game.DangerHigh
+	}
+	if room.NeedsLight() {
+		return game.DangerModerate
+	}
+	return game.DangerNone
+}
+
+func isBodySearchTarget(target string) bool {
+	target = strings.ToLower(strings.TrimSpace(target))
+	return strings.Contains(target, "doctor") ||
+		strings.Contains(target, "body") ||
+		strings.Contains(target, "corpse")
+}
+
 func (r Resolver) inferKeyDoor(keyID game.ItemID) (world.Door, bool) {
 	room, err := r.state.CurrentRoom()
 	if err != nil {
@@ -612,12 +723,11 @@ func (r Resolver) finish(result game.ActionResult) game.ActionResult {
 	}
 
 	result.StartedAtSeconds = r.state.NowSeconds
-	if result.DurationSeconds <= 0 {
-		return result
+	if result.DurationSeconds > 0 {
+		events := r.state.Advance(result.DurationSeconds)
+		result.Events = append(result.Events, events...)
 	}
-
-	events := r.state.Advance(result.DurationSeconds)
-	result.Events = append(result.Events, events...)
+	r.state.Kaya = r.state.Kaya.Apply(result)
 	return result
 }
 
@@ -658,6 +768,12 @@ func clarification(question string) game.ActionResult {
 		ClarificationQuestion: question,
 		Danger:                game.DangerNone,
 	}
+}
+
+func confirmationWithOutcome(outcome string, question string) game.ActionResult {
+	result := clarification(question)
+	result.Outcome = outcome
+	return result
 }
 
 func objectAmbiguity(resolution world.ObjectResolution) game.ActionResult {

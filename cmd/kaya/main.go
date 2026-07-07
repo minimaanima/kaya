@@ -14,6 +14,7 @@ import (
 	"kaya/internal/actions"
 	"kaya/internal/game"
 	"kaya/internal/intent"
+	kayastate "kaya/internal/kaya"
 	"kaya/internal/llm"
 	"kaya/internal/scenario"
 	"kaya/internal/world"
@@ -174,6 +175,17 @@ func runPlaytest() error {
 
 func runPlaytestScript(parser intent.Parser, script playtestScript) (playtestScriptLog, error) {
 	state := scenario.NewPrototypeWorld()
+	if script.UseInitialKaya {
+		state.Kaya = script.InitialKaya
+	}
+	if script.InitialRoom != "" {
+		state.CurrentRoomID = script.InitialRoom
+	}
+	for _, itemID := range script.InitialInventory {
+		state.AddInventory(itemID)
+	}
+	state.ActiveLight = script.InitialLight
+
 	resolver := actions.NewResolver(state)
 	log := playtestScriptLog{Name: script.Name}
 
@@ -189,6 +201,7 @@ func runPlaytestScript(parser intent.Parser, script playtestScript) (playtestScr
 				Inventory:  inventoryNames(state),
 				Discovered: discoveredItemNames(state),
 				LightOn:    state.ActiveLight,
+				Kaya:       state.Kaya,
 			},
 		}
 
@@ -213,6 +226,7 @@ func runPlaytestScript(parser intent.Parser, script playtestScript) (playtestScr
 			Inventory:  inventoryNames(state),
 			Discovered: discoveredItemNames(state),
 			LightOn:    state.ActiveLight,
+			Kaya:       state.Kaya,
 		}
 
 		if reason, ok := suspiciousOutcome(parsed, result); ok {
@@ -251,9 +265,14 @@ func printResult(result game.ActionResult) {
 }
 
 type playtestScript struct {
-	Name     string
-	Messages []string
-	Steps    []playtestMessage
+	Name             string
+	Messages         []string
+	Steps            []playtestMessage
+	UseInitialKaya   bool
+	InitialKaya      kayastate.State
+	InitialRoom      game.RoomID
+	InitialInventory []game.ItemID
+	InitialLight     bool
 }
 
 func (s playtestScript) playtestMessages() []playtestMessage {
@@ -309,6 +328,7 @@ type playtestWorldState struct {
 	Inventory  []string
 	Discovered []string
 	LightOn    bool
+	Kaya       kayastate.State
 }
 
 func defaultPlaytestScripts() []playtestScript {
@@ -434,6 +454,82 @@ func defaultPlaytestScripts() []playtestScript {
 				},
 			},
 		},
+		{
+			Name:           "autonomy refusal under panic",
+			UseInitialKaya: true,
+			InitialKaya: kayastate.State{
+				Stress: 85,
+				Trust:  5,
+				Fear:   80,
+			},
+			Steps: []playtestMessage{
+				{
+					Player: "go east",
+					Expect: playtestExpectation{
+						Action:  intent.ActionMove,
+						Outcome: "kaya_refused",
+					},
+				},
+			},
+		},
+		{
+			Name:           "autonomy trust asks confirmation",
+			UseInitialKaya: true,
+			InitialKaya: kayastate.State{
+				Stress: 55,
+				Trust:  90,
+				Fear:   55,
+			},
+			Steps: []playtestMessage{
+				{
+					Player: "go east",
+					Expect: playtestExpectation{
+						Action:  intent.ActionMove,
+						Outcome: "kaya_needs_confirmation",
+					},
+				},
+			},
+		},
+		{
+			Name:           "autonomy body search refusal",
+			UseInitialKaya: true,
+			InitialKaya: kayastate.State{
+				Stress: 80,
+				Trust:  5,
+				Fear:   80,
+			},
+			InitialRoom:      scenario.RoomStorage,
+			InitialInventory: []game.ItemID{scenario.ItemFlashlight},
+			InitialLight:     true,
+			Steps: []playtestMessage{
+				{
+					Player: "search the doctor near cabinet",
+					Expect: playtestExpectation{
+						Action:  intent.ActionSearch,
+						Outcome: "kaya_refused",
+					},
+				},
+			},
+		},
+		{
+			Name: "autonomy stress rises after danger",
+			Steps: []playtestMessage{
+				{
+					Player: "go east",
+					Expect: playtestExpectation{
+						Action:  intent.ActionMove,
+						Outcome: "moved",
+					},
+				},
+				{
+					Player: "wait",
+					Expect: playtestExpectation{
+						Action:  intent.ActionWait,
+						Outcome: "waited",
+					},
+				},
+			},
+		},
 	}
 }
 
@@ -498,7 +594,7 @@ func writePlaytestLog(run playtestRun) (string, error) {
 		for _, step := range script.Steps {
 			b.WriteString(fmt.Sprintf("### Step %d\n\n", step.Number))
 			b.WriteString(fmt.Sprintf("Player: `%s`\n\n", step.Player))
-			b.WriteString(fmt.Sprintf("Before: room=`%s`, time=`%d`, light=`%t`, inventory=`%s`, discovered=`%s`\n\n", step.Before.Room, step.Before.Time, step.Before.LightOn, strings.Join(step.Before.Inventory, ", "), strings.Join(step.Before.Discovered, ", ")))
+			b.WriteString(fmt.Sprintf("Before: room=`%s`, time=`%d`, light=`%t`, inventory=`%s`, discovered=`%s`, kaya=`%s`\n\n", step.Before.Room, step.Before.Time, step.Before.LightOn, strings.Join(step.Before.Inventory, ", "), strings.Join(step.Before.Discovered, ", "), formatKayaState(step.Before.Kaya)))
 			if !step.Expected.empty() {
 				b.WriteString(fmt.Sprintf("Expected: action=`%s`, outcome=`%s`\n\n", step.Expected.Action, step.Expected.Outcome))
 			}
@@ -525,7 +621,7 @@ func writePlaytestLog(run playtestRun) (string, error) {
 				b.WriteString(step.Suspicion)
 				b.WriteString("`\n")
 			}
-			b.WriteString(fmt.Sprintf("\nAfter: room=`%s`, time=`%d`, light=`%t`, inventory=`%s`, discovered=`%s`\n\n", step.After.Room, step.After.Time, step.After.LightOn, strings.Join(step.After.Inventory, ", "), strings.Join(step.After.Discovered, ", ")))
+			b.WriteString(fmt.Sprintf("\nAfter: room=`%s`, time=`%d`, light=`%t`, inventory=`%s`, discovered=`%s`, kaya=`%s`\n\n", step.After.Room, step.After.Time, step.After.LightOn, strings.Join(step.After.Inventory, ", "), strings.Join(step.After.Discovered, ", "), formatKayaState(step.After.Kaya)))
 		}
 	}
 
@@ -563,6 +659,10 @@ func discoveredItemNames(state *world.State) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func formatKayaState(state kayastate.State) string {
+	return fmt.Sprintf("stress:%d trust:%d fear:%d pain:%d exhaustion:%d emotion:%s", state.Stress, state.Trust, state.Fear, state.Pain, state.Exhaustion, state.DominantEmotion())
 }
 
 func envOrDefault(name string, fallback string) string {

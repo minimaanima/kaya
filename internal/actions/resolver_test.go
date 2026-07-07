@@ -6,6 +6,7 @@ import (
 
 	"kaya/internal/game"
 	"kaya/internal/intent"
+	"kaya/internal/kaya"
 	"kaya/internal/scenario"
 	"kaya/internal/world"
 )
@@ -44,6 +45,50 @@ func TestMoveToStorage(t *testing.T) {
 	}
 	if state.CurrentRoomID != scenario.RoomStorage {
 		t.Fatalf("CurrentRoomID = %q, want %q", state.CurrentRoomID, scenario.RoomStorage)
+	}
+}
+
+func TestHighStressCanBlockRiskyMoveIntoDarkRoom(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	state.Kaya = kaya.State{
+		Stress: 85,
+		Trust:  5,
+		Fear:   80,
+	}
+	resolver := NewResolver(state)
+
+	got := resolver.Resolve(intent.Intent{Action: intent.ActionMove, Direction: "east"})
+
+	if got.Outcome != "kaya_refused" {
+		t.Fatalf("Outcome = %q, want kaya_refused", got.Outcome)
+	}
+	if state.CurrentRoomID != scenario.RoomReception {
+		t.Fatalf("CurrentRoomID = %q, want reception", state.CurrentRoomID)
+	}
+	if state.NowSeconds != 0 {
+		t.Fatalf("NowSeconds = %d, want 0", state.NowSeconds)
+	}
+}
+
+func TestHighTrustCanAskConfirmationForRiskyMoveIntoDarkRoom(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	state.Kaya = kaya.State{
+		Stress: 55,
+		Trust:  90,
+		Fear:   55,
+	}
+	resolver := NewResolver(state)
+
+	got := resolver.Resolve(intent.Intent{Action: intent.ActionMove, Direction: "east"})
+
+	if got.Outcome != "kaya_needs_confirmation" {
+		t.Fatalf("Outcome = %q, want kaya_needs_confirmation", got.Outcome)
+	}
+	if !got.NeedsClarification {
+		t.Fatal("NeedsClarification = false, want true")
+	}
+	if state.CurrentRoomID != scenario.RoomReception {
+		t.Fatalf("CurrentRoomID = %q, want reception", state.CurrentRoomID)
 	}
 }
 
@@ -327,6 +372,27 @@ func TestAmbiguousDoctorSearchAsksClarification(t *testing.T) {
 	}
 	if !strings.Contains(got.ClarificationQuestion, "Doctor Near Door") {
 		t.Fatalf("ClarificationQuestion = %q, want Doctor Near Door", got.ClarificationQuestion)
+	}
+}
+
+func TestHighStressCanBlockRiskyBodySearch(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	state.CurrentRoomID = scenario.RoomStorage
+	state.ActiveLight = true
+	state.Kaya = kaya.State{
+		Stress: 80,
+		Trust:  5,
+		Fear:   80,
+	}
+	resolver := NewResolver(state)
+
+	got := resolver.Resolve(intent.Intent{Action: intent.ActionSearch, Target: "doctor near cabinet"})
+
+	if got.Outcome != "kaya_refused" {
+		t.Fatalf("Outcome = %q, want kaya_refused", got.Outcome)
+	}
+	if state.IsItemDiscovered(scenario.ItemBrassKey) {
+		t.Fatal("brass key was discovered after refused search")
 	}
 }
 
@@ -635,6 +701,9 @@ func TestScheduledEventFiresDuringAction(t *testing.T) {
 	}
 	if state.NowSeconds != 20 {
 		t.Fatalf("NowSeconds = %d, want 20", state.NowSeconds)
+	}
+	if state.Kaya.Stress == 0 {
+		t.Fatal("Kaya stress did not change after danger event")
 	}
 }
 

@@ -39,6 +39,9 @@ type ActionResult struct {
 	Events                []WorldEvent
 	StressDelta           int
 	TrustDelta            int
+	FearDelta             int
+	PainDelta             int
+	ExhaustionDelta       int
 	Danger                DangerLevel
 	NeedsClarification    bool
 	ClarificationQuestion string
