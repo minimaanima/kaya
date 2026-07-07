@@ -32,12 +32,14 @@ type WorldEvent struct {
 }
 
 type ActionResult struct {
-	StartedAtSeconds int
-	DurationSeconds  int
-	Outcome          string
-	VisibleFacts     []Fact
-	Events           []WorldEvent
-	StressDelta      int
-	TrustDelta       int
-	Danger           DangerLevel
+	StartedAtSeconds      int
+	DurationSeconds       int
+	Outcome               string
+	VisibleFacts          []Fact
+	Events                []WorldEvent
+	StressDelta           int
+	TrustDelta            int
+	Danger                DangerLevel
+	NeedsClarification    bool
+	ClarificationQuestion string
 }

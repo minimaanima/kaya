@@ -16,6 +16,7 @@ const (
 type Object struct {
 	ID              game.ObjectID
 	Name            string
+	Aliases         []string
 	Description     string
 	Kind            ObjectKind
 	RequiresLight   bool

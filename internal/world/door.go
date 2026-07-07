@@ -15,6 +15,7 @@ const (
 type Door struct {
 	ID          game.DoorID
 	Name        string
+	Aliases     []string
 	From        game.RoomID
 	To          game.RoomID
 	State       DoorState
@@ -23,7 +24,7 @@ type Door struct {
 }
 
 func (d Door) IsPassable() bool {
-	return d.State == DoorOpen || d.State == DoorDestroyed
+	return d.State == DoorOpen || d.State == DoorClosed || d.State == DoorDestroyed
 }
 
 func (d Door) CanUnlockWith(itemID game.ItemID) bool {

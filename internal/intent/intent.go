@@ -20,17 +20,39 @@ const (
 )
 
 type Intent struct {
-	Action                Action
-	Target                string
-	Item                  string
-	Direction             string
-	Modifiers             []string
-	Confidence            float64
-	RawText               string
-	NeedsClarification    bool
-	ClarificationQuestion string
+	Action                Action   `json:"action"`
+	Target                string   `json:"target"`
+	Item                  string   `json:"item"`
+	Direction             string   `json:"direction"`
+	Modifiers             []string `json:"modifiers"`
+	Confidence            float64  `json:"confidence"`
+	RawText               string   `json:"rawText"`
+	NeedsClarification    bool     `json:"needsClarification"`
+	ClarificationQuestion string   `json:"clarificationQuestion"`
 }
 
 func (i Intent) IsConfident(minimum float64) bool {
 	return i.Confidence >= minimum
+}
+
+func (a Action) Valid() bool {
+	switch a {
+	case ActionUnknown,
+		ActionMove,
+		ActionInspect,
+		ActionSearch,
+		ActionTakeItem,
+		ActionUseItem,
+		ActionTalk,
+		ActionWait,
+		ActionHide,
+		ActionListen,
+		ActionThrow,
+		ActionForceOpen,
+		ActionTurnOn,
+		ActionTurnOff:
+		return true
+	default:
+		return false
+	}
 }

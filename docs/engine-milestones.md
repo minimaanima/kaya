@@ -12,7 +12,7 @@ Establish the Go project structure and core domain types.
 
 Status:
 
-Started.
+Complete.
 
 Scope:
 
@@ -37,6 +37,10 @@ Goal:
 
 Create a playable in-memory world model without LLM integration.
 
+Status:
+
+Complete.
+
 Scope:
 
 - World state container.
@@ -48,6 +52,8 @@ Scope:
 - Current room tracking.
 - Basic visibility checks.
 - Basic world query functions.
+- Object and door aliases for natural target matching.
+- Ambiguous target detection.
 
 Required behavior:
 
@@ -57,18 +63,25 @@ Required behavior:
 - Check whether a room requires light.
 - Check whether an item is in inventory.
 - Check whether an object can be searched.
+- Resolve a target phrase like "doctor", "body", or "stairwell door" to matching world objects.
+- Report ambiguity when a target phrase matches multiple valid objects.
 
 Exit criteria:
 
 - A small hardcoded world can be loaded.
 - Tests prove dark-room visibility works.
 - Tests prove inventory and object lookup work.
+- Tests prove ambiguous targets are detected without guessing.
 
 ## Phase 2 - Action Resolver
 
 Goal:
 
 Validate and execute structured intents against world state.
+
+Status:
+
+Complete for the first prototype slice.
 
 Scope:
 
@@ -94,12 +107,17 @@ Exit criteria:
 - Player can solve a simple key-and-door puzzle through structured intents.
 - Tests cover valid and invalid actions.
 - Action results contain facts suitable for Kaya response generation.
+- `kaya play` can run a manual console prototype using Ollama intent parsing and deterministic action resolution.
 
 ## Phase 3 - Time System
 
 Goal:
 
 Make actions consume time and allow world events to happen during that time.
+
+Status:
+
+Complete for deterministic scheduled events.
 
 Scope:
 
@@ -123,6 +141,7 @@ Exit criteria:
 - Tests prove action durations advance the clock.
 - Tests prove scheduled events fire at the right time.
 - Engine can explain what happened during an action.
+- Console play shows action time cost and fired world events.
 
 ## Phase 4 - Kaya Autonomy
 
@@ -209,6 +228,7 @@ Exit criteria:
 - Tests cover parser schema validation.
 - Tests cover ambiguous input.
 - A free-form message can drive the simple prototype.
+- Gated Ollama integration tests cover natural player phrasing such as "look around", "what's in the room", and "can you check the doctor's coat".
 
 ## Phase 7 - Kaya Response Generation
 
