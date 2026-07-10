@@ -13,9 +13,9 @@ import (
 )
 
 func TestComposerAcceptsDraftCoveringRequiredFacts(t *testing.T) {
-	gen := &fakeGenerator{raw: `{"sentences":[{"factIds":["f001","f002"],"text":"I checked Doctor Near Cabinet. The doctor is dead."}]}`}
+	gen := &fakeGenerator{raw: `{"sentences":[{"factIds":["f001","f002"],"text":"I searched Doctor Near Cabinet. The doctor is dead."}]}`}
 	got := NewComposer(gen).Compose(context.Background(), doctorBundle())
-	if got.UsedFallback || got.Text != "I checked Doctor Near Cabinet. The doctor is dead." {
+	if got.UsedFallback || got.Text != "I searched Doctor Near Cabinet. The doctor is dead." {
 		t.Fatalf("response = %#v", got)
 	}
 }
@@ -62,6 +62,14 @@ func TestComposerRejectsUnsupportedOneWordClaim(t *testing.T) {
 
 func TestComposerRejectsUnapprovedPredicate(t *testing.T) {
 	gen := &fakeGenerator{raw: `{"sentences":[{"factIds":["f001","f002"],"text":"The cabinet is open. The doctor is dead."}]}`}
+	got := NewComposer(gen).Compose(context.Background(), doctorBundle())
+	if !got.UsedFallback || got.FallbackReason != "unsupported_claim" {
+		t.Fatalf("response = %#v", got)
+	}
+}
+
+func TestComposerRejectsUnapprovedMovementClaim(t *testing.T) {
+	gen := &fakeGenerator{raw: `{"sentences":[{"factIds":["f001","f002"],"text":"The doctor went to the cabinet. The doctor is dead."}]}`}
 	got := NewComposer(gen).Compose(context.Background(), doctorBundle())
 	if !got.UsedFallback || got.FallbackReason != "unsupported_claim" {
 		t.Fatalf("response = %#v", got)

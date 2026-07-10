@@ -19,13 +19,12 @@ var claimTokenPattern = regexp.MustCompile(`[\p{L}\p{N}]+(?:['’][\p{L}]+)?`)
 // world fact by itself. Every other content token must come from an approved
 // fact field, keeping prose claims conservative and deterministic.
 var safeVoiceLexicon = func() map[string]bool {
-	words := strings.Fields(`a an the i me my we our you your it its this that these those here there now
-	is are was were be been being can cannot could should do does did have has had
+	words := strings.Fields(`a an the i me my we our you your it its this that these those they them their
+	here there’s there's now i'm i've they're they're
+is are was were be been being am can cannot could should
 	no not yes and or but if then as so very still only just all both one first second
 	in on at by near beside next to from into of for with without around through inside outside
-	look looked see saw check checked search searched searching find found take took pick picked up
-	hold holding carry carrying move moved go went turn turned use used am to feel along pass passes
-	seconds second minute minutes`)
+	to feel along seconds second minute minutes`)
 	lexicon := make(map[string]bool, len(words))
 	for _, word := range words {
 		lexicon[word] = true
