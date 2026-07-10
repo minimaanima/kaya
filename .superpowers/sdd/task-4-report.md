@@ -37,3 +37,5 @@ Task 5 must migrate `cmd/kaya` and resolver flow from `Intent` to `TurnPlan` bef
 ## Schema null/type hardening
 
 Review identified that JSON `null` could decode into Go zero values. Added RED tests for null top-level fields and embedded `modifiers`; GREEN validation now rejects null and wrong JSON types for all required top-level, action, embedded-intent, and question fields. `modifiers:null` is no longer normalized to an empty array.
+
+After hardening, `rtk proxy go test ./...` still reports only the same `cmd/kaya` TurnPlan migration compile errors; all non-CLI packages pass.
