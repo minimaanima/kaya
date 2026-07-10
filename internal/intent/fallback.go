@@ -17,13 +17,20 @@ func FallbackPlan(message string) TurnPlan {
 		intent.Action, intent.Item, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionTurnOff, "flashlight", 0.9, false, ""
 	case isMovementMessage(low):
 		intent.Action, intent.Direction, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionMove, movementDirection(low), 0.8, false, ""
+	case isFallbackInventoryQuestion(low):
+		intent.Action, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionTalk, 0.8, false, ""
+		if item := fallbackInventoryItem(low); item != "" {
+			intent.Item = item
+		} else {
+			intent.Target = "inventory"
+		}
 	case isObjectInspectMessage(low):
 		intent.Action, intent.Target, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionInspect, extractObjectTarget(message), 0.8, false, ""
 	case isGeneralRoomAwareness(low, "") || strings.Contains(low, "inspect the room"):
 		intent.Action, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionInspect, 0.8, false, ""
 	case strings.Contains(low, "search") || strings.Contains(low, "rummage") || strings.Contains(low, "look through") || strings.Contains(low, "look inside") || strings.Contains(low, "look in") || strings.Contains(low, "check"):
 		intent.Action, intent.Target, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionSearch, extractSearchTarget(message), 0.7, false, ""
-	case strings.Contains(low, "pick up") || strings.Contains(low, "take ") || strings.HasPrefix(low, "take"):
+	case strings.Contains(low, "pick up") || strings.Contains(low, "take ") || strings.HasPrefix(low, "take") || strings.Contains(low, "grab "):
 		intent.Action, intent.Target, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionTakeItem, extractTakeTarget(message), 0.8, false, ""
 	case strings.Contains(low, "wait") || strings.Contains(low, "stay still") || strings.Contains(low, "pause"):
 		intent.Action, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionWait, 0.9, false, ""
@@ -31,6 +38,22 @@ func FallbackPlan(message string) TurnPlan {
 		intent.Action, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionListen, 0.8, false, ""
 	}
 	return TurnPlan{Actions: []PlannedAction{{Intent: intent, TargetMode: TargetSingle}}, Confidence: intent.Confidence, NeedsClarification: intent.NeedsClarification, ClarificationQuestion: intent.ClarificationQuestion, RawText: message}
+}
+
+func isFallbackInventoryQuestion(message string) bool {
+	return isInventoryQuestion(message) || strings.Contains(message, "what is in your bag") ||
+		strings.Contains(message, "what's in your bag") || strings.Contains(message, "what is in your inventory") ||
+		strings.Contains(message, "what's in your inventory")
+}
+
+func fallbackInventoryItem(message string) string {
+	if strings.Contains(message, "flashlight") || strings.Contains(message, "torch") {
+		return "flashlight"
+	}
+	if strings.Contains(message, "key") {
+		return "key"
+	}
+	return ""
 }
 
 func isObjectInspectMessage(message string) bool {

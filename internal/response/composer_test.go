@@ -60,6 +60,22 @@ func TestComposerRejectsUnsupportedOneWordClaim(t *testing.T) {
 	}
 }
 
+func TestComposerRejectsUnapprovedPredicate(t *testing.T) {
+	gen := &fakeGenerator{raw: `{"sentences":[{"factIds":["f001","f002"],"text":"The cabinet is open. The doctor is dead."}]}`}
+	got := NewComposer(gen).Compose(context.Background(), doctorBundle())
+	if !got.UsedFallback || got.FallbackReason != "unsupported_claim" {
+		t.Fatalf("response = %#v", got)
+	}
+}
+
+func TestComposerAcceptsNaturalGrammarAroundApprovedFacts(t *testing.T) {
+	gen := &fakeGenerator{raw: `{"sentences":[{"factIds":["f001","f002"],"text":"I am near the doctor and the doctor is dead."}]}`}
+	got := NewComposer(gen).Compose(context.Background(), doctorBundle())
+	if got.UsedFallback {
+		t.Fatalf("response = %#v", got)
+	}
+}
+
 func TestComposerFallsBackOnGeneratorError(t *testing.T) {
 	gen := &fakeGenerator{err: errors.New("offline")}
 	got := NewComposer(gen).Compose(context.Background(), doctorBundle())

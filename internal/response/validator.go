@@ -24,7 +24,7 @@ var safeVoiceLexicon = func() map[string]bool {
 	no not yes and or but if then as so very still only just all both one first second
 	in on at by near beside next to from into of for with without around through inside outside
 	look looked see saw check checked search searched searching find found take took pick picked up
-	hold holding carry carrying move moved go went turn turned use used open closed pass passes
+	hold holding carry carrying move moved go went turn turned use used am to feel along pass passes
 	seconds second minute minutes`)
 	lexicon := make(map[string]bool, len(words))
 	for _, word := range words {

@@ -65,6 +65,7 @@ func TestFallbackPlanExtractsObjectTargets(t *testing.T) {
 		{message: "look through the drawers", action: ActionSearch, target: "drawers"},
 		{message: "look inside the drawers", action: ActionSearch, target: "drawers"},
 		{message: "search for the desk", action: ActionSearch, target: "desk"},
+		{message: "grab the flashlight", action: ActionTakeItem, target: "flashlight"},
 		{message: "take the flashlight", action: ActionTakeItem, target: "flashlight"},
 		{message: "what is on the desk", action: ActionInspect, target: "desk"},
 		{message: "inspect the cabinet", action: ActionInspect, target: "cabinet"},
@@ -77,6 +78,20 @@ func TestFallbackPlanExtractsObjectTargets(t *testing.T) {
 			}
 			if got := plan.Actions[0].Intent.Target; got != tt.target {
 				t.Fatalf("Target = %q, want %q", got, tt.target)
+			}
+		})
+	}
+}
+
+func TestFallbackPlanRoutesInventoryQuestionsToTalk(t *testing.T) {
+	for _, message := range []string{"what is in your bag", "what's in your inventory", "do you have anything"} {
+		t.Run(message, func(t *testing.T) {
+			plan := FallbackPlan(message)
+			if len(plan.Actions) != 1 || plan.Actions[0].Intent.Action != ActionTalk {
+				t.Fatalf("plan = %#v, want talk", plan)
+			}
+			if plan.Actions[0].Intent.Target != "inventory" {
+				t.Fatalf("Target = %q, want inventory", plan.Actions[0].Intent.Target)
 			}
 		})
 	}
