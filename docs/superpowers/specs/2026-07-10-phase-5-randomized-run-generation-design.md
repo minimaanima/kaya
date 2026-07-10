@@ -91,13 +91,13 @@ type GeneratedRun struct {
 
 `Definition.Build` returns a new scenario template each time. The template contains rooms, doors, objects, and item definitions, but none of the required randomized items are placed.
 
-`scenario.NewPrototypeWorld()` remains backward compatible by building the template and applying the current fixed flashlight/key locations. `scenario.PrototypeRunDefinition()` supplies randomized rules to `rungen.Generate`.
+`scenario.NewPrototypeWorld()` remains backward compatible for item placement by building the template and applying the current fixed flashlight/key locations. It also exposes the three new empty candidate objects, so the prototype object count increases from three to six. `scenario.PrototypeRunDefinition()` supplies randomized rules to `rungen.Generate`.
 
 ## Determinism And Versioning
 
 Candidate and item rule order must never depend on Go map iteration. Definitions are validated, copied, and sorted by stable IDs before random selection.
 
-The generator builds the Cartesian product of candidate placements, sorts it, and applies one deterministic Fisher-Yates shuffle driven by a private SplitMix64 implementation. This avoids depending on Go runtime RNG changes. The version-1 constants and output sequence are locked by golden-vector tests. The generator tests shuffled combinations in order and returns the first proven playable combination. A combination is never retried.
+The generator builds the Cartesian product of candidate placements, sorts it, and applies one deterministic Fisher-Yates shuffle driven by a private SplitMix64 implementation. Bounded indexes use rejection sampling, not modulo-only reduction, so the shuffle has no modulo bias. This avoids depending on Go runtime RNG changes. The version-1 constants and output sequence are locked by golden-vector tests. The generator tests shuffled combinations in order and returns the first proven playable combination. A combination is never retried.
 
 The Cartesian product is capped at 4,096 combinations. Larger definitions fail with a typed error instead of consuming unbounded memory.
 
@@ -202,7 +202,7 @@ Implementation uses strict red-green-refactor cycles.
 Required automated tests:
 
 - Scenario template contains all candidate objects and no randomized required-item placements.
-- Fixed `NewPrototypeWorld()` remains unchanged for existing callers.
+- Fixed `NewPrototypeWorld()` keeps the original flashlight/key locations while exposing all six candidate objects.
 - Definition validation rejects malformed content with specific errors.
 - Same seed and versions produce identical placements and witness.
 - SplitMix64 golden vectors lock seed behavior across Go versions.
