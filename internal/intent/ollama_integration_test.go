@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"kaya/internal/game"
 	"kaya/internal/intent"
 	"kaya/internal/llm"
 )
@@ -111,14 +112,15 @@ func TestOllamaNaturalLanguageIntents(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 			defer cancel()
 
-			got, err := parser.Parse(ctx, tt.message)
+			plan, err := parser.Parse(ctx, tt.message, game.PerceptionSnapshot{})
 			if err != nil {
 				t.Fatalf("Parse(%q) returned error: %v", tt.message, err)
 			}
 
-			if got.Action != tt.action {
-				t.Fatalf("Action = %q, want %q; full intent: %+v", got.Action, tt.action, got)
+			if len(plan.Actions) == 0 || plan.Actions[0].Intent.Action != tt.action {
+				t.Fatalf("Action = %q, want %q; full plan: %+v", plan.Actions[0].Intent.Action, tt.action, plan)
 			}
+			got := plan.Actions[0].Intent
 			if tt.direction != "" && !strings.Contains(strings.ToLower(got.Direction), tt.direction) {
 				t.Fatalf("Direction = %q, want to contain %q; full intent: %+v", got.Direction, tt.direction, got)
 			}

@@ -1,0 +1,41 @@
+package intent
+
+import "strings"
+
+const defaultClarification = "What do you want Kaya to do?"
+
+func FallbackPlan(message string) TurnPlan {
+	message = strings.TrimSpace(message)
+	low := strings.ToLower(message)
+	intent := Intent{Action: ActionUnknown, Confidence: 0, RawText: message, Modifiers: []string{}, NeedsClarification: true, ClarificationQuestion: defaultClarification}
+	switch {
+	case (strings.Contains(low, "feel") || strings.Contains(low, "run your hands") || strings.Contains(low, "trace")) && strings.Contains(low, "wall"):
+		intent.Action, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionExplore, 0.8, false, ""
+	case (strings.Contains(low, "turn on") || strings.Contains(low, "switch on") || strings.Contains(low, "activate")) && (strings.Contains(low, "flashlight") || strings.Contains(low, "torch") || strings.Contains(low, "light")):
+		intent.Action, intent.Item, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionTurnOn, "flashlight", 0.9, false, ""
+	case (strings.Contains(low, "turn off") || strings.Contains(low, "switch off") || strings.Contains(low, "deactivate")) && (strings.Contains(low, "flashlight") || strings.Contains(low, "torch") || strings.Contains(low, "light")):
+		intent.Action, intent.Item, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionTurnOff, "flashlight", 0.9, false, ""
+	case movementDirection(low) != "":
+		intent.Action, intent.Direction, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionMove, movementDirection(low), 0.8, false, ""
+	case isGeneralRoomAwareness(low, "") || strings.Contains(low, "inspect the room"):
+		intent.Action, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionInspect, 0.8, false, ""
+	case strings.Contains(low, "search") || strings.Contains(low, "rummage") || strings.Contains(low, "look through") || strings.Contains(low, "check"):
+		intent.Action, intent.Target, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionSearch, strings.TrimSpace(message), 0.7, false, ""
+	case strings.Contains(low, "pick up") || strings.Contains(low, "take ") || strings.HasPrefix(low, "take"):
+		intent.Action, intent.Target, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionTakeItem, strings.TrimSpace(message), 0.8, false, ""
+	case strings.Contains(low, "wait") || strings.Contains(low, "stay still") || strings.Contains(low, "pause"):
+		intent.Action, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionWait, 0.9, false, ""
+	case strings.Contains(low, "listen") || strings.Contains(low, "hear"):
+		intent.Action, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionListen, 0.8, false, ""
+	}
+	return TurnPlan{Actions: []PlannedAction{{Intent: intent, TargetMode: TargetSingle}}, Confidence: intent.Confidence, NeedsClarification: intent.NeedsClarification, ClarificationQuestion: intent.ClarificationQuestion, RawText: message}
+}
+
+func movementDirection(message string) string {
+	for _, direction := range []string{"north", "south", "east", "west", "left", "right", "forward", "backward", "back", "ahead", "up", "down"} {
+		if containsToken(message, direction) {
+			return direction
+		}
+	}
+	return ""
+}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"kaya/internal/game"
 )
 
 type fakeGenerator struct {
@@ -25,30 +27,64 @@ func (f *fakeGenerator) Generate(ctx context.Context, systemPrompt string, userP
 	return response, nil
 }
 
-func TestParserParseValidIntent(t *testing.T) {
+func (f *fakeGenerator) GenerateJSON(ctx context.Context, systemPrompt, userPrompt string, schema any) (string, error) {
+	return f.Generate(ctx, systemPrompt, userPrompt)
+}
+
+func TestParserParsesPluralCompoundTurn(t *testing.T) {
 	generator := &fakeGenerator{responses: []string{`{
-		"action": "search",
-		"target": "dead doctor coat pockets",
-		"item": "flashlight",
-		"direction": "",
-		"modifiers": ["carefully", "keep_light_low"],
-		"confidence": 0.93,
-		"rawText": "check the pockets",
-		"needsClarification": false,
-		"clarificationQuestion": ""
+		"actions":[{"intent":{"action":"search","target":"doctors","item":"","direction":"","modifiers":[],"confidence":0.96,"rawText":"search the doctors","needsClarification":false,"clarificationQuestion":""},"targetMode":"all"}],
+		"questions":[{"kind":"life_status","target":"they","targetMode":"all"}],
+		"confidence":0.96,"needsClarification":false,"clarificationQuestion":"","rawText":"search the doctors are they dead"
 	}`}}
+	parser := NewParser(generator)
+	plan, err := parser.Parse(context.Background(), "search the doctors are they dead", game.PerceptionSnapshot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Actions) != 1 || plan.Actions[0].TargetMode != TargetAll || len(plan.Questions) != 1 {
+		t.Fatalf("plan = %#v", plan)
+	}
+}
+
+func TestFallbackPlanExploresWalls(t *testing.T) {
+	plan := FallbackPlan("feel along the walls for another exit")
+	if len(plan.Actions) != 1 || plan.Actions[0].Intent.Action != ActionExplore {
+		t.Fatalf("plan = %#v", plan)
+	}
+}
+
+func TestParseTurnPlanRejectsMoreThanFourActions(t *testing.T) {
+	_, err := ParseTurnPlanJSON(fiveActionPlanJSON)
+	if !errors.Is(err, ErrPlanTooLarge) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+const fiveActionPlanJSON = `{
+	"actions":[
+		{"intent":{"action":"wait","target":"","item":"","direction":"","modifiers":[],"confidence":1,"rawText":"wait","needsClarification":false,"clarificationQuestion":""},"targetMode":"single"},
+		{"intent":{"action":"wait","target":"","item":"","direction":"","modifiers":[],"confidence":1,"rawText":"wait","needsClarification":false,"clarificationQuestion":""},"targetMode":"single"},
+		{"intent":{"action":"wait","target":"","item":"","direction":"","modifiers":[],"confidence":1,"rawText":"wait","needsClarification":false,"clarificationQuestion":""},"targetMode":"single"},
+		{"intent":{"action":"wait","target":"","item":"","direction":"","modifiers":[],"confidence":1,"rawText":"wait","needsClarification":false,"clarificationQuestion":""},"targetMode":"single"},
+		{"intent":{"action":"wait","target":"","item":"","direction":"","modifiers":[],"confidence":1,"rawText":"wait","needsClarification":false,"clarificationQuestion":""},"targetMode":"single"}
+	],"questions":[],"confidence":1,"needsClarification":false,"clarificationQuestion":"","rawText":"wait five times"
+}`
+
+func TestParserParseValidIntent(t *testing.T) {
+	generator := &fakeGenerator{responses: []string{`{"actions":[{"intent":{"action":"search","target":"dead doctor coat pockets","item":"flashlight","direction":"","modifiers":["carefully","keep_light_low"],"confidence":0.93,"rawText":"check the pockets","needsClarification":false,"clarificationQuestion":""},"targetMode":"single"}],"questions":[],"confidence":0.93,"needsClarification":false,"clarificationQuestion":"","rawText":"check the pockets"}`}}
 
 	parser := NewParser(generator)
-	got, err := parser.Parse(context.Background(), "check the pockets")
+	got, err := parser.Parse(context.Background(), "check the pockets", game.PerceptionSnapshot{})
 	if err != nil {
 		t.Fatalf("Parse returned error: %v", err)
 	}
 
-	if got.Action != ActionSearch {
-		t.Fatalf("Action = %q, want %q", got.Action, ActionSearch)
+	if got.Actions[0].Intent.Action != ActionSearch {
+		t.Fatalf("Action = %q, want %q", got.Actions[0].Intent.Action, ActionSearch)
 	}
-	if got.Target != "dead doctor coat pockets" {
-		t.Fatalf("Target = %q, want dead doctor coat pockets", got.Target)
+	if got.Actions[0].Intent.Target != "dead doctor coat pockets" {
+		t.Fatalf("Target = %q, want dead doctor coat pockets", got.Actions[0].Intent.Target)
 	}
 	if generator.calls != 1 {
 		t.Fatalf("generator calls = %d, want 1", generator.calls)
@@ -58,27 +94,17 @@ func TestParserParseValidIntent(t *testing.T) {
 func TestParserRepairsInvalidJSON(t *testing.T) {
 	generator := &fakeGenerator{responses: []string{
 		`not json`,
-		`{
-			"action": "unknown",
-			"target": "",
-			"item": "",
-			"direction": "",
-			"modifiers": [],
-			"confidence": 0.18,
-			"rawText": "Do it.",
-			"needsClarification": true,
-			"clarificationQuestion": "What do you want Kaya to do?"
-		}`,
+		`{"actions":[{"intent":{"action":"unknown","target":"","item":"","direction":"","modifiers":[],"confidence":0.18,"rawText":"Do it.","needsClarification":true,"clarificationQuestion":"What do you want Kaya to do?"},"targetMode":"single"}],"questions":[],"confidence":0.18,"needsClarification":true,"clarificationQuestion":"What do you want Kaya to do?","rawText":"Do it."}`,
 	}}
 
 	parser := NewParser(generator)
-	got, err := parser.Parse(context.Background(), "Do it.")
+	got, err := parser.Parse(context.Background(), "Do it.", game.PerceptionSnapshot{})
 	if err != nil {
 		t.Fatalf("Parse returned error: %v", err)
 	}
 
-	if got.Action != ActionUnknown {
-		t.Fatalf("Action = %q, want %q", got.Action, ActionUnknown)
+	if len(got.Actions) != 0 {
+		t.Fatalf("Actions = %#v, want no executable actions", got.Actions)
 	}
 	if !got.NeedsClarification {
 		t.Fatal("NeedsClarification = false, want true")
