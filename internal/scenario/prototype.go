@@ -2,7 +2,6 @@ package scenario
 
 import (
 	"kaya/internal/game"
-	"kaya/internal/rungen"
 	"kaya/internal/world"
 )
 
@@ -161,33 +160,4 @@ func NewPrototypeWorld() *world.State {
 	state.Objects[body.ID] = body
 
 	return state
-}
-
-func PrototypeRunDefinition() rungen.Definition {
-	return rungen.Definition{
-		ScenarioID:      PrototypeScenarioID,
-		ScenarioVersion: PrototypeScenarioVersion,
-		Build:           NewPrototypeTemplate,
-		StartRoom:       RoomReception,
-		WinRoom:         RoomStairwell,
-		LightItem:       ItemFlashlight,
-		ItemRules: []rungen.ItemRule{
-			{
-				ItemID: ItemFlashlight,
-				Candidates: []rungen.PlacementCandidate{
-					{ObjectID: ObjectReceptionDesk},
-					{ObjectID: ObjectReceptionFloor},
-					{ObjectID: ObjectCollapsedChair},
-				},
-			},
-			{
-				ItemID: ItemBrassKey,
-				Candidates: []rungen.PlacementCandidate{
-					{ObjectID: ObjectBodyCabinet},
-					{ObjectID: ObjectBodyDoor},
-					{ObjectID: ObjectStorageCabinet},
-				},
-			},
-		},
-	}
 }

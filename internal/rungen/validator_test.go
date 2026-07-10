@@ -6,12 +6,13 @@ import (
 
 	"kaya/internal/game"
 	"kaya/internal/rungen"
+	"kaya/internal/runscenario"
 	"kaya/internal/scenario"
 	"kaya/internal/world"
 )
 
 func TestValidateReturnsWitnessForPrototypePlacement(t *testing.T) {
-	definition := scenario.PrototypeRunDefinition()
+	definition := runscenario.PrototypeDefinition()
 	state := definition.Build()
 	placements := []rungen.Placement{
 		{ItemID: scenario.ItemFlashlight, ObjectID: scenario.ObjectReceptionDesk},
@@ -35,7 +36,7 @@ func TestValidateReturnsWitnessForPrototypePlacement(t *testing.T) {
 }
 
 func TestValidateRejectsKeyBehindWinDoor(t *testing.T) {
-	definition := scenario.PrototypeRunDefinition()
+	definition := runscenario.PrototypeDefinition()
 	state := definition.Build()
 	const hiddenObject game.ObjectID = "stairwell_locker"
 	room := state.Rooms[scenario.RoomStairwell]
@@ -61,7 +62,7 @@ func TestValidateRejectsKeyBehindWinDoor(t *testing.T) {
 }
 
 func TestValidateRejectsMissingRequiredItem(t *testing.T) {
-	definition := scenario.PrototypeRunDefinition()
+	definition := runscenario.PrototypeDefinition()
 	state := definition.Build()
 	if err := rungen.ApplyPlacements(state, []rungen.Placement{{ItemID: scenario.ItemFlashlight, ObjectID: scenario.ObjectReceptionDesk}}); err != nil {
 		t.Fatal(err)
@@ -75,7 +76,7 @@ func TestValidateRejectsMissingRequiredItem(t *testing.T) {
 }
 
 func TestValidateRejectsDoorWithUnavailableKey(t *testing.T) {
-	definition := scenario.PrototypeRunDefinition()
+	definition := runscenario.PrototypeDefinition()
 	state := definition.Build()
 	placements := []rungen.Placement{
 		{ItemID: scenario.ItemFlashlight, ObjectID: scenario.ObjectReceptionDesk},
@@ -99,7 +100,7 @@ func TestValidateRejectsDoorWithUnavailableKey(t *testing.T) {
 }
 
 func TestValidateRejectsFlashlightInDarkStorage(t *testing.T) {
-	definition := scenario.PrototypeRunDefinition()
+	definition := runscenario.PrototypeDefinition()
 	state := definition.Build()
 	placements := []rungen.Placement{
 		{ItemID: scenario.ItemFlashlight, ObjectID: scenario.ObjectStorageCabinet},

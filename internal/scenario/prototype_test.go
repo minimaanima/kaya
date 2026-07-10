@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"kaya/internal/game"
-	"kaya/internal/rungen"
 )
 
 func TestNewPrototypeWorldLoads(t *testing.T) {
@@ -52,22 +51,6 @@ func TestNewPrototypeWorldKeepsFixedPlacements(t *testing.T) {
 	}
 	if !containsItem(state.Objects[ObjectBodyCabinet].ContainedItems, ItemBrassKey) {
 		t.Fatal("fixed world key not on doctor near cabinet")
-	}
-}
-
-func TestPrototypeRunDefinitionHasThreeCandidatesPerItem(t *testing.T) {
-	definition := PrototypeRunDefinition()
-
-	if err := rungen.ValidateDefinition(definition); err != nil {
-		t.Fatal(err)
-	}
-	if len(definition.ItemRules) != 2 {
-		t.Fatalf("rules = %d, want 2", len(definition.ItemRules))
-	}
-	for _, rule := range definition.ItemRules {
-		if len(rule.Candidates) != 3 {
-			t.Fatalf("item %q candidates = %d, want 3", rule.ItemID, len(rule.Candidates))
-		}
 	}
 }
 
