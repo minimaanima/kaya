@@ -211,6 +211,8 @@ Exit criteria:
 
 ## Phase 6 - Intent Parser Integration
 
+Phase 6 status: Complete for the first context-aware, multi-action intent slice.
+
 Goal:
 
 Connect free-form player messages to structured intents.
@@ -239,6 +241,8 @@ Exit criteria:
 - Gated Ollama integration tests cover natural player phrasing such as "look around", "what's in the room", and "can you check the doctor's coat".
 
 ## Phase 7 - Kaya Response Generation
+
+Phase 7 status: Complete for the first fact-locked Ollama response slice with deterministic fallback.
 
 Goal:
 

@@ -10,6 +10,8 @@ import (
 	"kaya/internal/game"
 	"kaya/internal/intent"
 	"kaya/internal/llm"
+	"kaya/internal/scenario"
+	"kaya/internal/turn"
 )
 
 func TestOllamaNaturalLanguageIntents(t *testing.T) {
@@ -17,7 +19,7 @@ func TestOllamaNaturalLanguageIntents(t *testing.T) {
 		t.Skip("set KAYA_RUN_OLLAMA_TESTS=1 to run Ollama integration tests")
 	}
 
-	model := envOrDefault("KAYA_OLLAMA_MODEL", "mistral:latest")
+	model := envOrDefault("KAYA_OLLAMA_MODEL", "qwen3.5:4b")
 	baseURL := envOrDefault("KAYA_OLLAMA_URL", llm.DefaultOllamaURL)
 
 	client, err := llm.NewOllamaClient(model, llm.WithOllamaBaseURL(baseURL))
@@ -131,6 +133,91 @@ func TestOllamaNaturalLanguageIntents(t *testing.T) {
 				t.Fatalf("Modifiers = %v, want %q; full intent: %+v", got.Modifiers, tt.modifier, got)
 			}
 		})
+	}
+}
+
+func TestOllamaContextualSemanticTurnPlans(t *testing.T) {
+	if os.Getenv("KAYA_RUN_OLLAMA_TESTS") != "1" {
+		t.Skip("set KAYA_RUN_OLLAMA_TESTS=1 to run Ollama integration tests")
+	}
+
+	model := envOrDefault("KAYA_OLLAMA_MODEL", "qwen3.5:4b")
+	baseURL := envOrDefault("KAYA_OLLAMA_URL", llm.DefaultOllamaURL)
+	client, err := llm.NewOllamaClient(model, llm.WithOllamaBaseURL(baseURL))
+	if err != nil {
+		t.Fatalf("NewOllamaClient returned error: %v", err)
+	}
+
+	state := scenario.NewPrototypeWorld()
+	state.CurrentRoomID = scenario.RoomStorage
+	state.PreviousRoomID = scenario.RoomReception
+	state.ActiveLight = true
+	if err := state.ObserveRoom(scenario.RoomStorage, scenario.RoomReception); err != nil {
+		t.Fatalf("ObserveRoom returned error: %v", err)
+	}
+	snapshot, err := state.PerceptionSnapshot()
+	if err != nil {
+		t.Fatalf("PerceptionSnapshot returned error: %v", err)
+	}
+	parser := intent.NewParser(client)
+
+	tests := []struct {
+		name  string
+		text  string
+		check func(*testing.T, intent.TurnPlan)
+	}{
+		{name: "singular doctor is engine ambiguous", text: "inspect the doctor", check: func(t *testing.T, plan intent.TurnPlan) {
+			if len(plan.Actions) != 1 || plan.Actions[0].Intent.Action != intent.ActionInspect || plan.Actions[0].TargetMode != intent.TargetSingle {
+				t.Fatalf("plan = %#v, want singular inspect", plan)
+			}
+			result := turn.NewExecutor(state).Execute(plan)
+			if result.StopReason != "target_ambiguous" {
+				t.Fatalf("stop reason = %q, want target_ambiguous; result = %#v", result.StopReason, result)
+			}
+		}},
+		{name: "explicit both uses all", text: "inspect both doctors", check: requireAllObjectAction(intent.ActionInspect)},
+		{name: "remembered them uses all", text: "search them", check: requireAllObjectAction(intent.ActionSearch)},
+		{name: "compound search and life question", text: "search the doctors are they dead", check: func(t *testing.T, plan intent.TurnPlan) {
+			if len(plan.Actions) != 1 || plan.Actions[0].Intent.Action != intent.ActionSearch || plan.Actions[0].TargetMode != intent.TargetAll {
+				t.Fatalf("actions = %#v, want one all-target search", plan.Actions)
+			}
+			if len(plan.Questions) != 1 || plan.Questions[0].Kind != game.FactLifeStatus || plan.Questions[0].TargetMode != intent.TargetAll {
+				t.Fatalf("questions = %#v, want one all-target life-status question", plan.Questions)
+			}
+		}},
+		{name: "wall wording explores", text: "feel along the walls for another exit", check: func(t *testing.T, plan intent.TurnPlan) {
+			if len(plan.Actions) != 1 || plan.Actions[0].Intent.Action != intent.ActionExplore {
+				t.Fatalf("plan = %#v, want explore action", plan)
+			}
+		}},
+		{name: "cabinet typo resolves", text: "what is isnide the storage cabiner", check: func(t *testing.T, plan intent.TurnPlan) {
+			if len(plan.Actions) != 1 || plan.Actions[0].Intent.Action != intent.ActionInspect {
+				t.Fatalf("plan = %#v, want inspect action", plan)
+			}
+			result := turn.NewExecutor(state).Execute(plan)
+			if len(result.Outcomes) != 1 || result.Outcomes[0].TargetObjectID != scenario.ObjectStorageCabinet {
+				t.Fatalf("result = %#v, want Storage Cabinet resolution", result)
+			}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			plan, err := parser.Parse(ctx, tt.text, snapshot)
+			if err != nil {
+				t.Fatalf("Parse(%q) returned error: %v", tt.text, err)
+			}
+			tt.check(t, plan)
+		})
+	}
+}
+
+func requireAllObjectAction(action intent.Action) func(*testing.T, intent.TurnPlan) {
+	return func(t *testing.T, plan intent.TurnPlan) {
+		if len(plan.Actions) != 1 || plan.Actions[0].Intent.Action != action || plan.Actions[0].TargetMode != intent.TargetAll {
+			t.Fatalf("plan = %#v, want one %q action with targetMode all", plan, action)
+		}
 	}
 }
 

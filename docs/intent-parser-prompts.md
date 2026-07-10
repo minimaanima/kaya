@@ -103,6 +103,39 @@ Modifiers:
 Return JSON only.
 ```
 
+## Current semantic `TurnPlan` contract
+
+The parser now returns a `TurnPlan`, not a single legacy intent:
+
+```json
+{
+  "actions": [{"intent": {"action": "search", "target": "doctors", "item": "", "direction": "", "modifiers": [], "confidence": 0.9, "rawText": "...", "needsClarification": false, "clarificationQuestion": ""}, "targetMode": "all"}],
+  "questions": [{"kind": "life_status", "target": "doctors", "targetMode": "all"}],
+  "confidence": 0.9,
+  "needsClarification": false,
+  "clarificationQuestion": "",
+  "rawText": "original player message"
+}
+```
+
+`actions` are ordered executable requests. `questions` are read-only fact requests. Each action has an embedded `Intent` with the legacy action fields plus `targetMode` (`single` or `all`). The engine resolves names, referents, ambiguity, and outcomes after parsing.
+
+The perception payload is allowlisted to current `roomName`, `hasUsefulLight`, visible objects (`id`, `name`, `aliases`), known exit directions, discovered inventory items (`id`, `name`, `aliases`), and up to three recent referent groups. The parser must not infer objects or facts outside this snapshot.
+
+Limits are four actions and four questions per turn. `explore` is reserved for tactile searching such as feeling along walls. Life/dead questions use `kind: "life_status"`; explicit plural or remembered-group references use `targetMode: "all"`.
+
+If generated JSON fails strict schema validation, the parser sends it through the repair prompt once. A second failure, transport failure, or unavailable generator returns the deterministic fallback plan. Plans below confidence `0.40` are converted to clarification by the parser; the engine performs the final target and action validation.
+
+## Response fact-lock contract
+
+The response generator receives only the player's message, Kaya's emotion, and engine-approved `game.Fact` records. A response draft contains one to six sentences; every sentence must include at least one `factIds` entry and may cite only IDs in the supplied bundle. Every required fact must be covered, text is capped at 300 runes per sentence and 900 total, and named entities must occur in an approved fact. Invalid, incomplete, or invented drafts use the deterministic fallback renderer, which emits required fact text in bundle order.
+
+The exact gated real-model suite is:
+
+```text
+rtk proxy powershell -NoProfile -Command '$env:KAYA_RUN_OLLAMA_TESTS="1"; go test ./internal/intent ./internal/response -count=1 -v'
+```
+
 ## Repair Prompt
 
 ```text
