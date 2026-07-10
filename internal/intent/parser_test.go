@@ -84,6 +84,28 @@ func TestParserNormalizesApprovedContextualPhrases(t *testing.T) {
 	}
 }
 
+func TestParserNormalizesPluralDoctorTargetAsAll(t *testing.T) {
+	raw := `{"actions":[{"intent":{"action":"inspect","target":"doctors","item":"","direction":"","modifiers":[],"confidence":0.9,"rawText":"inspect the doctors","needsClarification":false,"clarificationQuestion":""},"targetMode":"single"}],"questions":[],"confidence":0.9,"needsClarification":false,"clarificationQuestion":"","rawText":"inspect the doctors"}`
+	plan, err := NewParser(&fakeGenerator{responses: []string{raw}}).Parse(context.Background(), "inspect the doctors", game.PerceptionSnapshot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Actions) != 1 || plan.Actions[0].Intent.Action != ActionInspect || plan.Actions[0].TargetMode != TargetAll {
+		t.Fatalf("plan = %#v, want plural inspect with targetMode all", plan)
+	}
+}
+
+func TestParserPreservesRepeatedGenericActions(t *testing.T) {
+	raw := `{"actions":[{"intent":{"action":"wait","target":"","item":"","direction":"","modifiers":[],"confidence":0.9,"rawText":"wait twice","needsClarification":false,"clarificationQuestion":""},"targetMode":"single"},{"intent":{"action":"wait","target":"","item":"","direction":"","modifiers":[],"confidence":0.9,"rawText":"wait twice","needsClarification":false,"clarificationQuestion":""},"targetMode":"single"}],"questions":[],"confidence":0.9,"needsClarification":false,"clarificationQuestion":"","rawText":"wait twice"}`
+	plan, err := NewParser(&fakeGenerator{responses: []string{raw}}).Parse(context.Background(), "wait twice", game.PerceptionSnapshot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Actions) != 2 || plan.Actions[0].Intent.Action != ActionWait || plan.Actions[1].Intent.Action != ActionWait {
+		t.Fatalf("plan = %#v, want two ordered wait actions", plan)
+	}
+}
+
 func TestParserNormalizesUnsupportedQuestionToClarification(t *testing.T) {
 	raw := `{"actions":[{"intent":{"action":"search","target":"room","item":"","direction":"","modifiers":[],"confidence":0.9,"rawText":"do they have anything","needsClarification":false,"clarificationQuestion":""},"targetMode":"all"}],"questions":[],"confidence":0.9,"needsClarification":false,"clarificationQuestion":"","rawText":"do they have anything"}`
 	plan, err := NewParser(&fakeGenerator{responses: []string{raw}}).Parse(context.Background(), "do they have anything", game.PerceptionSnapshot{})

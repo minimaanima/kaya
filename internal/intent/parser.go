@@ -66,8 +66,6 @@ func (p Parser) Parse(ctx context.Context, message string, snapshot game.Percept
 func normalizeContextualPlan(plan TurnPlan, message string) TurnPlan {
 	plan.RawText = strings.TrimSpace(message)
 	raw := strings.ToLower(plan.RawText)
-	plan.Actions = dedupePlannedActions(plan.Actions)
-	plan.Questions = dedupeFactQuestions(plan.Questions)
 	if strings.Contains(raw, "do they have anything") {
 		plan.Actions = nil
 		plan.Questions = nil
@@ -102,6 +100,8 @@ func normalizeContextualPlan(plan TurnPlan, message string) TurnPlan {
 		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionThrow, Item: "brick", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetSingle}}
 	case strings.Contains(raw, "inspect both doctors"):
 		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionInspect, Target: "doctors", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetAll}}
+	case strings.Contains(raw, "inspect the doctors"):
+		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionInspect, Target: "doctors", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetAll}}
 	case strings.Contains(raw, "inspect the doctor"):
 		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionInspect, Target: "doctor", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetSingle}}
 	case strings.Trim(raw, " .!?\t\n") == "search them":
@@ -113,41 +113,6 @@ func normalizeContextualPlan(plan TurnPlan, message string) TurnPlan {
 	}
 	return plan
 }
-
-func dedupePlannedActions(actions []PlannedAction) []PlannedAction {
-	result := make([]PlannedAction, 0, len(actions))
-	for _, action := range actions {
-		duplicate := false
-		for _, existing := range result {
-			if action.TargetMode == existing.TargetMode && action.Intent.Action == existing.Intent.Action && action.Intent.Target == existing.Intent.Target && action.Intent.Item == existing.Intent.Item && action.Intent.Direction == existing.Intent.Direction {
-				duplicate = true
-				break
-			}
-		}
-		if !duplicate {
-			result = append(result, action)
-		}
-	}
-	return result
-}
-
-func dedupeFactQuestions(questions []FactQuestion) []FactQuestion {
-	result := make([]FactQuestion, 0, len(questions))
-	for _, question := range questions {
-		duplicate := false
-		for _, existing := range result {
-			if question == existing {
-				duplicate = true
-				break
-			}
-		}
-		if !duplicate {
-			result = append(result, question)
-		}
-	}
-	return result
-}
-
 func ParseTurnPlanJSON(raw string) (TurnPlan, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
