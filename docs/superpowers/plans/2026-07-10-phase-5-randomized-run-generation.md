@@ -4,7 +4,7 @@
 
 **Goal:** Generate seeded prototype runs and accept them only when a BFS witness reaches the stairwell and the real resolver replays that witness successfully.
 
-**Architecture:** `internal/rungen` owns versioned randomness, placement enumeration, symbolic validation, replay, and generation without importing `scenario`. `internal/scenario` supplies a fresh template and a prototype `rungen.Definition`. The CLI requests a generated run, prints reproducibility data, then gives its untouched state to the existing resolver loop.
+**Architecture:** `internal/rungen` owns versioned randomness, placement enumeration, symbolic validation, replay, and generation without importing `scenario`. `internal/scenario` supplies dependency-free content; `internal/runscenario` assembles that content into a prototype `rungen.Definition`. The CLI requests a generated run, prints reproducibility data, then gives its untouched state to the existing resolver loop.
 
 **Tech Stack:** Go standard library, existing `world`, `intent`, `actions`, and `scenario` packages, table-driven Go tests, local Ollama `qwen3.5:4b` only for manual intent-parser verification.
 
@@ -19,6 +19,8 @@
 - Use no new external dependency.
 - Write each behavior test first, run it to observe the expected failure, then implement only enough production code to pass.
 - Run shell commands through `rtk`.
+
+**Execution amendment:** During replay integration, the original `scenario -> rungen` adapter caused an `actions` test import cycle because `rungen` imports `actions`. The adapter was moved to `internal/runscenario`; all implementation and integration references use `runscenario.PrototypeDefinition()`.
 
 ---
 

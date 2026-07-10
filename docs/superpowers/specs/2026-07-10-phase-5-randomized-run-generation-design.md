@@ -44,7 +44,7 @@ The selected design matches common lock-and-key roguelike generation: build cand
 
 Create `internal/rungen` as the generic generation package. It may import `actions`, `game`, `intent`, and `world`; it must not import `scenario`.
 
-`internal/scenario` owns prototype content and returns a `rungen.Definition`. This direction avoids an import cycle and keeps content decisions outside the generic algorithm.
+`internal/scenario` owns dependency-free prototype content. `internal/runscenario` is the assembly adapter that imports both `scenario` and `rungen` and returns a `rungen.Definition`. Keeping this adapter above both packages prevents the `actions -> scenario -> rungen -> actions` test import cycle while leaving content decisions outside the generic algorithm.
 
 Primary interfaces:
 
@@ -91,7 +91,7 @@ type GeneratedRun struct {
 
 `Definition.Build` returns a new scenario template each time. The template contains rooms, doors, objects, and item definitions, but none of the required randomized items are placed.
 
-`scenario.NewPrototypeWorld()` remains backward compatible for item placement by building the template and applying the current fixed flashlight/key locations. It also exposes the three new empty candidate objects, so the prototype object count increases from three to six. `scenario.PrototypeRunDefinition()` supplies randomized rules to `rungen.Generate`.
+`scenario.NewPrototypeWorld()` remains backward compatible for item placement by building the template and applying the current fixed flashlight/key locations. It also exposes the three new empty candidate objects, so the prototype object count increases from three to six. `runscenario.PrototypeDefinition()` supplies randomized rules to `rungen.Generate`.
 
 ## Determinism And Versioning
 

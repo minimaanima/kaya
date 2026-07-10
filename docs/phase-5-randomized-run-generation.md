@@ -1,5 +1,27 @@
 # Phase 5 - Randomized Run Generation Plan
 
+## Implementation Status
+
+The first focused slice is implemented:
+
+```text
+versioned SplitMix64 seed
++ unbiased Fisher-Yates placement order
++ symbolic BFS witness
++ authoritative resolver replay
+= accepted playable run
+```
+
+Run a reproducible game with:
+
+```text
+kaya play --seed 12345
+```
+
+The prototype exhaustively proves all nine flashlight/key placement combinations and sweeps seeds `1..1000`. Seed `12345` was also completed end to end through `qwen3.5:4b`, the intent parser, and the real resolver.
+
+Verification note: unit tests, vet, Ollama integration, and the CLI playthrough pass. `go test -race ./...` remains pending because the current Windows toolchain has CGO disabled without GCC, while the installed WSL environment hangs during startup.
+
 Phase 5 adds roguelike variation without allowing broken runs. The key rule is:
 
 ```text
