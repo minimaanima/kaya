@@ -731,6 +731,29 @@ func TestDarkRoomKnowsOnlyRouteBack(t *testing.T) {
 	}
 }
 
+func TestGuessedHiddenDangerousExitReturnsUnknownUnderPanic(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	resolver := NewResolver(state)
+	if got := resolver.Resolve(intent.Intent{Action: intent.ActionMove, Direction: "east"}); got.Outcome != "moved" {
+		t.Fatalf("move outcome = %q", got.Outcome)
+	}
+	door := state.Doors[scenario.DoorStairwell]
+	door.State = world.DoorClosed
+	state.Doors[door.ID] = door
+	destination := state.Rooms[scenario.RoomStairwell]
+	destination.Visibility = world.VisibilityPitchBlack
+	state.Rooms[destination.ID] = destination
+	state.Kaya = kaya.State{Stress: 90, Fear: 90}
+
+	got := resolver.Resolve(intent.Intent{Action: intent.ActionMove, Direction: "north"})
+	if got.Outcome != "exit_unknown" {
+		t.Fatalf("hidden dangerous exit outcome = %q, want exit_unknown", got.Outcome)
+	}
+	if state.CurrentRoomID != scenario.RoomStorage {
+		t.Fatalf("room = %q, want storage", state.CurrentRoomID)
+	}
+}
+
 func TestExploreDiscoversAuthoredExitAndCostsThirtySeconds(t *testing.T) {
 	state := scenario.NewPrototypeWorld()
 	resolver := NewResolver(state)

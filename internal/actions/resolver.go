@@ -511,20 +511,20 @@ func (r Resolver) moveDanger(in intent.Intent) game.DangerLevel {
 		return game.DangerNone
 	}
 
-	room, err := r.state.CurrentRoom()
+	exits, err := r.state.AvailableExits()
 	if err != nil {
 		return game.DangerNone
 	}
 
 	if isBackDirection(direction) && r.state.PreviousRoomID != "" {
-		for _, exit := range room.Exits {
+		for _, exit := range exits {
 			if exit.To == r.state.PreviousRoomID {
 				return r.exitDanger(exit)
 			}
 		}
 	}
 
-	for _, exit := range room.Exits {
+	for _, exit := range exits {
 		if world.MatchesTarget(direction, exit.Direction, nil) {
 			return r.exitDanger(exit)
 		}
