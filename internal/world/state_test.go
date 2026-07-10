@@ -7,6 +7,18 @@ import (
 	"kaya/internal/game"
 )
 
+func TestCanSeeObjectUsesExplicitLightState(t *testing.T) {
+	room := Room{Visibility: VisibilityPitchBlack}
+	object := Object{RequiresLight: false}
+
+	if CanSeeObject(room, object, false) {
+		t.Fatal("pitch-black object visible without light")
+	}
+	if !CanSeeObject(room, object, true) {
+		t.Fatal("object hidden with active light")
+	}
+}
+
 const (
 	roomReception game.RoomID   = "reception"
 	roomStorage   game.RoomID   = "storage"

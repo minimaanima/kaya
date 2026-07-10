@@ -94,16 +94,7 @@ func (s *State) VisibleObjects() ([]Object, error) {
 }
 
 func (s *State) CanSeeObject(room Room, object Object) bool {
-	if s != nil && s.ActiveLight {
-		return true
-	}
-	if room.Visibility == VisibilityPitchBlack {
-		return false
-	}
-	if room.NeedsLight() {
-		return !object.RequiresLight
-	}
-	return true
+	return CanSeeObject(room, object, s != nil && s.ActiveLight)
 }
 
 func (s *State) HasItem(itemID game.ItemID) bool {
