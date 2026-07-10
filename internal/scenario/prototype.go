@@ -145,6 +145,7 @@ func NewPrototypeTemplate() *world.State {
 		Danger:      game.DangerLow,
 	})
 
+	_ = state.ObserveRoom(RoomReception, "")
 	return state
 }
 

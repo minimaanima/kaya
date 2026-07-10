@@ -46,6 +46,8 @@ func (r Resolver) Resolve(in intent.Intent) game.ActionResult {
 		result = r.turnOn(in)
 	case intent.ActionTurnOff:
 		result = r.turnOff(in)
+	case intent.ActionExplore:
+		result = r.explore()
 	case intent.ActionListen:
 		result = makeResult("listened", 5, "I listen carefully. The damaged building creaks around me.")
 	case intent.ActionWait:
@@ -131,19 +133,29 @@ func (r Resolver) move(in intent.Intent) game.ActionResult {
 		return failed("move_failed", err.Error())
 	}
 
+	knownExits, err := r.state.AvailableExits()
+	if err != nil {
+		return failed("move_failed", err.Error())
+	}
+
 	if isBackDirection(direction) && r.state.PreviousRoomID != "" {
-		for _, exit := range room.Exits {
+		for _, exit := range knownExits {
 			if exit.To == r.state.PreviousRoomID {
 				return r.moveThroughExit(direction, exit)
 			}
 		}
 	}
 
-	for _, exit := range room.Exits {
+	for _, exit := range knownExits {
 		if !world.MatchesTarget(direction, exit.Direction, nil) {
 			continue
 		}
 		return r.moveThroughExit(direction, exit)
+	}
+	for _, exit := range room.Exits {
+		if world.MatchesTarget(direction, exit.Direction, nil) {
+			return failed("exit_unknown", "I cannot safely find that route in the dark.")
+		}
 	}
 
 	return failed("exit_not_found", "I cannot find that way out.")
@@ -163,6 +175,9 @@ func (r Resolver) moveThroughExit(direction string, exit world.Exit) game.Action
 	from := r.state.CurrentRoomID
 	r.state.CurrentRoomID = exit.To
 	r.state.PreviousRoomID = from
+	if err := r.state.ObserveRoom(exit.To, from); err != nil {
+		return failed("move_failed", err.Error())
+	}
 	destination, err := r.state.CurrentRoom()
 	if err != nil {
 		return failed("move_failed", err.Error())
@@ -294,6 +309,9 @@ func (r Resolver) useItem(in intent.Intent) game.ActionResult {
 			return failed("missing_item", "I do not have the flashlight.")
 		}
 		r.state.ActiveLight = true
+		if err := r.state.ObserveRoom(r.state.CurrentRoomID, ""); err != nil {
+			return failed("use_failed", err.Error())
+		}
 		return makeResult("flashlight_on", 3, "I turn on the flashlight.")
 	}
 	if !world.MatchesTarget(in.Item, "key", []string{"brass key", "small key"}) {
@@ -352,9 +370,23 @@ func (r Resolver) turnOn(in intent.Intent) game.ActionResult {
 			return failed("missing_item", "I do not have the flashlight.")
 		}
 		r.state.ActiveLight = true
+		if err := r.state.ObserveRoom(r.state.CurrentRoomID, ""); err != nil {
+			return failed("turn_on_failed", err.Error())
+		}
 		return makeResult("flashlight_on", 3, "I turn on the flashlight.")
 	}
 	return failed("cannot_turn_on", "I cannot turn that on.")
+}
+
+func (r Resolver) explore() game.ActionResult {
+	exit, found, err := r.state.DiscoverNextUnknownExit()
+	if err != nil {
+		return failed("explore_failed", err.Error())
+	}
+	if !found {
+		return makeResult("no_unknown_exits", 30, "I feel along the walls but cannot find another exit.")
+	}
+	return makeResult("exit_discovered", 30, "I feel along the wall and find a way "+exit.Direction+".")
 }
 
 func (r Resolver) turnOff(in intent.Intent) game.ActionResult {
@@ -537,13 +569,13 @@ func isBodySearchTarget(target string) bool {
 }
 
 func (r Resolver) inferKeyDoor(keyID game.ItemID) (world.Door, bool) {
-	room, err := r.state.CurrentRoom()
+	exits, err := r.state.AvailableExits()
 	if err != nil {
 		return world.Door{}, false
 	}
 
 	var matches []world.Door
-	for _, exit := range room.Exits {
+	for _, exit := range exits {
 		if exit.Door == "" {
 			continue
 		}

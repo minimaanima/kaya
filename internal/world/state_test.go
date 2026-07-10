@@ -175,6 +175,10 @@ func TestResolveObjectRespectsVisibility(t *testing.T) {
 func TestResolveDoorByNameAndDirection(t *testing.T) {
 	state := testState()
 	state.CurrentRoomID = roomStorage
+	state.ActiveLight = true
+	if err := state.ObserveRoom(roomStorage, ""); err != nil {
+		t.Fatal(err)
+	}
 
 	byName, err := state.ResolveDoor("stairwell door")
 	if err != nil {
@@ -280,6 +284,9 @@ func testState() *State {
 		Aliases:     []string{"torch", "light"},
 		Description: "A heavy flashlight with a weak beam.",
 		Portable:    true,
+	}
+	if err := state.ObserveRoom(roomReception, ""); err != nil {
+		panic(err)
 	}
 
 	return state
