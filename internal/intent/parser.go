@@ -137,12 +137,27 @@ func ParseTurnPlanJSON(raw string) (TurnPlan, error) {
 
 func validatePlanRequiredFields(shape map[string]json.RawMessage) error {
 	var actions []json.RawMessage
-	if err := json.Unmarshal(shape["actions"], &actions); err != nil {
+	if err := decodeNonNull(shape["actions"], &actions, "actions"); err != nil {
 		return fmt.Errorf("actions must be an array: %w", err)
+	}
+	var confidence float64
+	var needsClarification bool
+	var clarificationQuestion, rawText string
+	if err := decodeNonNull(shape["confidence"], &confidence, "confidence"); err != nil {
+		return err
+	}
+	if err := decodeNonNull(shape["needsClarification"], &needsClarification, "needsClarification"); err != nil {
+		return err
+	}
+	if err := decodeNonNull(shape["clarificationQuestion"], &clarificationQuestion, "clarificationQuestion"); err != nil {
+		return err
+	}
+	if err := decodeNonNull(shape["rawText"], &rawText, "rawText"); err != nil {
+		return err
 	}
 	for i, encoded := range actions {
 		var action map[string]json.RawMessage
-		if err := json.Unmarshal(encoded, &action); err != nil {
+		if err := decodeNonNull(encoded, &action, fmt.Sprintf("action %d", i)); err != nil {
 			return fmt.Errorf("action %d must be an object: %w", i, err)
 		}
 		for _, key := range []string{"intent", "targetMode"} {
@@ -150,8 +165,12 @@ func validatePlanRequiredFields(shape map[string]json.RawMessage) error {
 				return fmt.Errorf("action %d missing required field %q", i, key)
 			}
 		}
+		var targetMode string
+		if err := decodeNonNull(action["targetMode"], &targetMode, fmt.Sprintf("action %d targetMode", i)); err != nil {
+			return err
+		}
 		var embedded map[string]json.RawMessage
-		if err := json.Unmarshal(action["intent"], &embedded); err != nil {
+		if err := decodeNonNull(action["intent"], &embedded, fmt.Sprintf("action %d intent", i)); err != nil {
 			return fmt.Errorf("action %d intent must be an object: %w", i, err)
 		}
 		for _, key := range []string{"action", "target", "item", "direction", "modifiers", "confidence", "rawText", "needsClarification", "clarificationQuestion"} {
@@ -159,14 +178,23 @@ func validatePlanRequiredFields(shape map[string]json.RawMessage) error {
 				return fmt.Errorf("action %d intent missing required field %q", i, key)
 			}
 		}
+		var actionName, target, item, direction, embeddedRaw, embeddedQuestion string
+		var modifiers []string
+		var embeddedConfidence float64
+		var embeddedNeedsClarification bool
+		for key, out := range map[string]any{"action": &actionName, "target": &target, "item": &item, "direction": &direction, "rawText": &embeddedRaw, "clarificationQuestion": &embeddedQuestion, "modifiers": &modifiers, "confidence": &embeddedConfidence, "needsClarification": &embeddedNeedsClarification} {
+			if err := decodeNonNull(embedded[key], out, fmt.Sprintf("action %d intent %s", i, key)); err != nil {
+				return err
+			}
+		}
 	}
 	var questions []json.RawMessage
-	if err := json.Unmarshal(shape["questions"], &questions); err != nil {
+	if err := decodeNonNull(shape["questions"], &questions, "questions"); err != nil {
 		return fmt.Errorf("questions must be an array: %w", err)
 	}
 	for i, encoded := range questions {
 		var question map[string]json.RawMessage
-		if err := json.Unmarshal(encoded, &question); err != nil {
+		if err := decodeNonNull(encoded, &question, fmt.Sprintf("question %d", i)); err != nil {
 			return fmt.Errorf("question %d must be an object: %w", i, err)
 		}
 		for _, key := range []string{"kind", "target", "targetMode"} {
@@ -174,6 +202,22 @@ func validatePlanRequiredFields(shape map[string]json.RawMessage) error {
 				return fmt.Errorf("question %d missing required field %q", i, key)
 			}
 		}
+		var kind, target, targetMode string
+		for key, out := range map[string]any{"kind": &kind, "target": &target, "targetMode": &targetMode} {
+			if err := decodeNonNull(question[key], out, fmt.Sprintf("question %d %s", i, key)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func decodeNonNull(raw json.RawMessage, target any, field string) error {
+	if strings.TrimSpace(string(raw)) == "null" {
+		return fmt.Errorf("%s must not be null", field)
+	}
+	if err := json.Unmarshal(raw, target); err != nil {
+		return fmt.Errorf("%s has invalid type: %w", field, err)
 	}
 	return nil
 }

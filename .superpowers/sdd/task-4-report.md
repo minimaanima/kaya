@@ -33,3 +33,7 @@ Implemented strict TurnPlan decoding, schema, contextual generation with one rep
 ## Concerns
 
 Task 5 must migrate `cmd/kaya` and resolver flow from `Intent` to `TurnPlan` before repository-wide tests can pass.
+
+## Schema null/type hardening
+
+Review identified that JSON `null` could decode into Go zero values. Added RED tests for null top-level fields and embedded `modifiers`; GREEN validation now rejects null and wrong JSON types for all required top-level, action, embedded-intent, and question fields. `modifiers:null` is no longer normalized to an empty array.

@@ -3,6 +3,7 @@ package intent
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"kaya/internal/game"
@@ -59,6 +60,41 @@ func TestParseTurnPlanRejectsMoreThanFourActions(t *testing.T) {
 	if !errors.Is(err, ErrPlanTooLarge) {
 		t.Fatalf("error = %v", err)
 	}
+}
+
+func TestParseTurnPlanRejectsNullSchemaFields(t *testing.T) {
+	base := `{"actions":[],"questions":[],"confidence":1,"needsClarification":false,"clarificationQuestion":"","rawText":"wait"}`
+	for _, field := range []string{"actions", "questions", "confidence", "needsClarification", "clarificationQuestion", "rawText"} {
+		t.Run(field, func(t *testing.T) {
+			raw := strings.Replace(base, `"`+field+`":`+fieldValue(base, field), `"`+field+`":null`, 1)
+			if _, err := ParseTurnPlanJSON(raw); err == nil {
+				t.Fatalf("expected null %s to fail", field)
+			}
+		})
+	}
+}
+
+func TestParseTurnPlanRejectsNullEmbeddedModifiers(t *testing.T) {
+	raw := `{"actions":[{"intent":{"action":"wait","target":"","item":"","direction":"","modifiers":null,"confidence":1,"rawText":"wait","needsClarification":false,"clarificationQuestion":""},"targetMode":"single"}],"questions":[],"confidence":1,"needsClarification":false,"clarificationQuestion":"","rawText":"wait"}`
+	if _, err := ParseTurnPlanJSON(raw); err == nil {
+		t.Fatal("expected null modifiers to fail")
+	}
+}
+
+func fieldValue(raw, field string) string {
+	marker := `"` + field + `":`
+	start := strings.Index(raw, marker) + len(marker)
+	rest := raw[start:]
+	if strings.HasPrefix(rest, `"`) {
+		end := strings.Index(rest[1:], `"`) + 2
+		return rest[:end]
+	}
+	for i, r := range rest {
+		if r == ',' || r == '}' {
+			return rest[:i]
+		}
+	}
+	return rest
 }
 
 const fiveActionPlanJSON = `{
