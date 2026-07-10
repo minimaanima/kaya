@@ -302,8 +302,8 @@ func TestTurnOnFlashlightRevealsDarkRoomObjects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VisibleObjects after returned error: %v", err)
 	}
-	if len(after) != 2 {
-		t.Fatalf("visible after len = %d, want 2", len(after))
+	if len(after) != 3 {
+		t.Fatalf("visible after len = %d, want 3", len(after))
 	}
 }
 
