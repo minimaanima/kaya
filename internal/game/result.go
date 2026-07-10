@@ -22,7 +22,12 @@ const (
 )
 
 type Fact struct {
-	Text string
+	ID       FactID   `json:"id"`
+	Kind     FactKind `json:"kind"`
+	Subject  string   `json:"subject"`
+	Value    string   `json:"value"`
+	Text     string   `json:"text"`
+	Required bool     `json:"required"`
 }
 
 type WorldEvent struct {
@@ -32,6 +37,8 @@ type WorldEvent struct {
 }
 
 type ActionResult struct {
+	Status                ActionStatus
+	TargetObjectIDs       []ObjectID
 	StartedAtSeconds      int
 	DurationSeconds       int
 	Outcome               string

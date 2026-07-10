@@ -24,4 +24,5 @@ type Object struct {
 	ContainedItems  []game.ItemID
 	RevealedItemIDs []game.ItemID
 	Flags           map[string]bool
+	ObservableFacts []ObservableFact
 }

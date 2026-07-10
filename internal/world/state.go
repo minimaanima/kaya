@@ -26,6 +26,8 @@ type State struct {
 	Inventory            map[game.ItemID]bool
 	DiscoveredItems      map[game.ItemID]bool
 	KnownExitDirections  map[game.RoomID]map[string]bool
+	RecentReferents      []game.ReferentGroup
+	ObservedObjectFacts  map[game.ObjectID]map[game.FactKind]game.Fact
 	LastMentionedItemID  game.ItemID
 	LastMentionedItemIDs []game.ItemID
 	ActiveLight          bool
@@ -44,6 +46,7 @@ func NewState(currentRoomID game.RoomID) *State {
 		Inventory:           make(map[game.ItemID]bool),
 		DiscoveredItems:     make(map[game.ItemID]bool),
 		KnownExitDirections: make(map[game.RoomID]map[string]bool),
+		ObservedObjectFacts: make(map[game.ObjectID]map[game.FactKind]game.Fact),
 		Kaya:                kaya.DefaultState(),
 	}
 }

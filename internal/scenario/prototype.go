@@ -104,6 +104,10 @@ func NewPrototypeTemplate() *world.State {
 		Kind:          world.ObjectBody,
 		RequiresLight: true,
 		Searchable:    true,
+		ObservableFacts: []world.ObservableFact{{
+			Kind: game.FactLifeStatus, Value: "dead", Text: "The doctor is dead.",
+			RevealOn: []world.ObservationMethod{world.ObservationInspect, world.ObservationSearch},
+		}},
 	}
 	state.Objects[ObjectBodyDoor] = world.Object{
 		ID:            ObjectBodyDoor,
@@ -113,6 +117,10 @@ func NewPrototypeTemplate() *world.State {
 		Kind:          world.ObjectBody,
 		RequiresLight: false,
 		Searchable:    true,
+		ObservableFacts: []world.ObservableFact{{
+			Kind: game.FactLifeStatus, Value: "dead", Text: "The doctor is dead.",
+			RevealOn: []world.ObservationMethod{world.ObservationInspect, world.ObservationSearch},
+		}},
 	}
 	state.Objects[ObjectStorageCabinet] = world.Object{
 		ID:            ObjectStorageCabinet,
