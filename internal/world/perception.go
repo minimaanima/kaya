@@ -30,7 +30,7 @@ func (s *State) PerceptionSnapshot() (game.PerceptionSnapshot, error) {
 		VisibleObjects:  make([]game.PerceivedObject, 0, len(objects)),
 		KnownExits:      make([]game.PerceivedExit, 0, len(exits)),
 		Inventory:       make([]game.PerceivedItem, 0, len(s.Inventory)),
-		RecentReferents: copyRecentReferents(s.RecentReferents),
+		RecentReferents: s.perceivedReferents(objects),
 	}
 	for _, object := range objects {
 		snapshot.VisibleObjects = append(snapshot.VisibleObjects, game.PerceivedObject{
@@ -97,78 +97,171 @@ func (s *State) RememberItems(ids []game.ItemID) {
 func (s *State) ResolveObjectGroup(target string, all bool) (ObjectResolution, error) {
 	target = normalizeTarget(target)
 	if target == "" {
-		return ObjectResolution{}, nil
+		return ObjectResolution{All: all}, nil
 	}
 
 	switch target {
 	case "it", "that":
-		return s.resolveRememberedObjects(target, false)
+		return s.resolveRememberedObjects(target, false, all)
 	case "they", "them", "those", "both":
-		return s.resolveRememberedObjects(target, true)
+		return s.resolveRememberedObjects(target, true, all)
 	}
 
 	resolution, err := s.ResolveObject(target)
 	if err != nil || len(resolution.Matches) > 0 {
+		resolution.All = all
 		return resolution, err
 	}
 	if singular := singularLastWord(target); singular != target {
-		return s.ResolveObject(singular)
+		resolution, err = s.ResolveObject(singular)
+		resolution.All = all
+		return resolution, err
 	}
+	resolution.All = all
 	return resolution, nil
 }
 
-func (s *State) resolveRememberedObjects(target string, plural bool) (ObjectResolution, error) {
+func (s *State) resolveRememberedObjects(target string, plural bool, all bool) (ObjectResolution, error) {
 	visible, err := s.VisibleObjects()
 	if err != nil {
 		return ObjectResolution{}, err
-	}
-	byID := make(map[game.ObjectID]Object, len(visible))
-	for _, object := range visible {
-		byID[object.ID] = object
 	}
 	for i := len(s.RecentReferents) - 1; i >= 0; i-- {
 		ids := s.RecentReferents[i].ObjectIDs
 		if (plural && len(ids) < 2) || (!plural && len(ids) != 1) {
 			continue
 		}
-		matches := make([]Object, 0, len(ids))
-		for _, id := range ids {
-			if object, ok := byID[id]; ok {
+		remembered := objectIDSet(ids)
+		matches := make([]Object, 0, len(remembered))
+		for _, object := range visible {
+			if remembered[object.ID] {
 				matches = append(matches, object)
 			}
 		}
 		if (plural && len(matches) >= 2) || (!plural && len(matches) == 1) {
-			return ObjectResolution{Target: target, Matches: matches}, nil
+			return ObjectResolution{Target: target, Matches: matches, All: all}, nil
 		}
 	}
-	return ObjectResolution{Target: target}, nil
+	return ObjectResolution{Target: target, All: all}, nil
 }
 
 func (s *State) rememberReferent(group game.ReferentGroup) {
 	if len(group.ObjectIDs) == 0 && len(group.ItemIDs) == 0 {
 		return
 	}
-	s.RecentReferents = append(s.RecentReferents, group)
-	if len(s.RecentReferents) > maxRecentReferentGroups {
-		s.RecentReferents = append([]game.ReferentGroup(nil), s.RecentReferents[len(s.RecentReferents)-maxRecentReferentGroups:]...)
-	}
+	s.RecentReferents = appendCoalescedReferent(s.RecentReferents, group)
 }
 
-func copyRecentReferents(groups []game.ReferentGroup) []game.ReferentGroup {
+func (s *State) perceivedReferents(visible []Object) []game.ReferentGroup {
 	result := make([]game.ReferentGroup, 0, maxRecentReferentGroups)
-	for _, group := range groups {
-		if len(group.ObjectIDs) == 0 && len(group.ItemIDs) == 0 {
+	for _, group := range s.RecentReferents {
+		filtered := game.ReferentGroup{
+			ObjectIDs: perceivedObjectIDs(group.ObjectIDs, visible),
+			ItemIDs:   s.perceivedItemIDs(group.ItemIDs),
+		}
+		if len(filtered.ObjectIDs) == 0 && len(filtered.ItemIDs) == 0 {
 			continue
 		}
-		result = append(result, game.ReferentGroup{
-			ObjectIDs: append([]game.ObjectID(nil), group.ObjectIDs...),
-			ItemIDs:   append([]game.ItemID(nil), group.ItemIDs...),
-		})
-		if len(result) > maxRecentReferentGroups {
-			result = append([]game.ReferentGroup(nil), result[len(result)-maxRecentReferentGroups:]...)
-		}
+		result = appendCoalescedReferent(result, filtered)
 	}
 	return result
+}
+
+func perceivedObjectIDs(ids []game.ObjectID, visible []Object) []game.ObjectID {
+	requested := objectIDSet(ids)
+	perceived := make([]game.ObjectID, 0, len(requested))
+	for _, object := range visible {
+		if requested[object.ID] {
+			perceived = append(perceived, object.ID)
+		}
+	}
+	return perceived
+}
+
+func (s *State) perceivedItemIDs(ids []game.ItemID) []game.ItemID {
+	seen := make(map[game.ItemID]bool, len(ids))
+	perceived := make([]game.ItemID, 0, len(ids))
+	for _, id := range ids {
+		if id == "" || seen[id] || (!s.DiscoveredItems[id] && !s.Inventory[id]) {
+			continue
+		}
+		if _, exists := s.Items[id]; !exists {
+			continue
+		}
+		seen[id] = true
+		perceived = append(perceived, id)
+	}
+	return perceived
+}
+
+func appendCoalescedReferent(groups []game.ReferentGroup, group game.ReferentGroup) []game.ReferentGroup {
+	coalesced := make([]game.ReferentGroup, 0, len(groups)+1)
+	for _, existing := range groups {
+		if sameReferentGroup(existing, group) {
+			continue
+		}
+		coalesced = append(coalesced, existing)
+	}
+	coalesced = append(coalesced, game.ReferentGroup{
+		ObjectIDs: append([]game.ObjectID(nil), group.ObjectIDs...),
+		ItemIDs:   append([]game.ItemID(nil), group.ItemIDs...),
+	})
+	if len(coalesced) > maxRecentReferentGroups {
+		coalesced = append([]game.ReferentGroup(nil), coalesced[len(coalesced)-maxRecentReferentGroups:]...)
+	}
+	return coalesced
+}
+
+func sameReferentGroup(left, right game.ReferentGroup) bool {
+	return sameObjectIDs(left.ObjectIDs, right.ObjectIDs) && sameItemIDs(left.ItemIDs, right.ItemIDs)
+}
+
+func sameObjectIDs(left, right []game.ObjectID) bool {
+	leftSet := objectIDSet(left)
+	rightSet := objectIDSet(right)
+	if len(leftSet) != len(rightSet) {
+		return false
+	}
+	for id := range leftSet {
+		if !rightSet[id] {
+			return false
+		}
+	}
+	return true
+}
+
+func sameItemIDs(left, right []game.ItemID) bool {
+	leftSet := make(map[game.ItemID]bool, len(left))
+	rightSet := make(map[game.ItemID]bool, len(right))
+	for _, id := range left {
+		if id != "" {
+			leftSet[id] = true
+		}
+	}
+	for _, id := range right {
+		if id != "" {
+			rightSet[id] = true
+		}
+	}
+	if len(leftSet) != len(rightSet) {
+		return false
+	}
+	for id := range leftSet {
+		if !rightSet[id] {
+			return false
+		}
+	}
+	return true
+}
+
+func objectIDSet(ids []game.ObjectID) map[game.ObjectID]bool {
+	set := make(map[game.ObjectID]bool, len(ids))
+	for _, id := range ids {
+		if id != "" {
+			set[id] = true
+		}
+	}
+	return set
 }
 
 func singularLastWord(target string) string {

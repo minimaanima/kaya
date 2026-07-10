@@ -214,14 +214,15 @@ func (s *State) ResolveDoor(target string) (DoorResolution, error) {
 type ObjectResolution struct {
 	Target  string
 	Matches []Object
+	All     bool
 }
 
 func (r ObjectResolution) Found() bool {
-	return len(r.Matches) == 1
+	return len(r.Matches) == 1 || (r.All && len(r.Matches) > 0)
 }
 
 func (r ObjectResolution) Ambiguous() bool {
-	return len(r.Matches) > 1
+	return len(r.Matches) > 1 && !r.All
 }
 
 func (r ObjectResolution) Missing() bool {
