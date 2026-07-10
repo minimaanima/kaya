@@ -118,7 +118,7 @@ The parser now returns a `TurnPlan`, not a single legacy intent:
 }
 ```
 
-`actions` are ordered executable requests. `questions` are read-only fact requests. Each action has an embedded `Intent` with the legacy action fields plus `targetMode` (`single` or `all`). The engine resolves names, referents, ambiguity, and outcomes after parsing.
+`actions` are ordered executable requests. `questions` are read-only fact requests. Each `PlannedAction` contains an `intent` object with the legacy action fields and a sibling `targetMode` (`single` or `all`); `targetMode` is not an `Intent` field. The engine resolves names, referents, ambiguity, and outcomes after parsing.
 
 The perception payload is allowlisted to current `roomName`, `hasUsefulLight`, visible objects (`id`, `name`, `aliases`), known exit directions, discovered inventory items (`id`, `name`, `aliases`), and up to three recent referent groups. The parser must not infer objects or facts outside this snapshot.
 

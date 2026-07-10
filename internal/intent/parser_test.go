@@ -55,6 +55,46 @@ func TestFallbackPlanExploresWalls(t *testing.T) {
 	}
 }
 
+func TestParserNormalizesApprovedContextualPhrases(t *testing.T) {
+	valid := func(raw string) string {
+		return `{"actions":[{"intent":{"action":"explore","target":"","item":"","direction":"","modifiers":[],"confidence":0.9,"rawText":"` + raw + `","needsClarification":false,"clarificationQuestion":""},"targetMode":"single"}],"questions":[],"confidence":0.9,"needsClarification":false,"clarificationQuestion":"","rawText":"` + raw + `"}`
+	}
+	tests := []struct {
+		name string
+		msg  string
+		want Action
+	}{
+		{name: "singular doctor", msg: "inspect the doctor", want: ActionInspect},
+		{name: "both doctors", msg: "inspect both doctors", want: ActionInspect},
+		{name: "them", msg: "search them", want: ActionSearch},
+		{name: "compound", msg: "search the doctors are they dead", want: ActionSearch},
+		{name: "walls", msg: "feel along the walls for another exit", want: ActionExplore},
+		{name: "cabinet typo", msg: "what is isnide the storage cabiner", want: ActionInspect},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan, err := NewParser(&fakeGenerator{responses: []string{valid(tt.msg)}}).Parse(context.Background(), tt.msg, game.PerceptionSnapshot{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(plan.Actions) != 1 || plan.Actions[0].Intent.Action != tt.want {
+				t.Fatalf("plan = %#v", plan)
+			}
+		})
+	}
+}
+
+func TestParserNormalizesUnsupportedQuestionToClarification(t *testing.T) {
+	raw := `{"actions":[{"intent":{"action":"search","target":"room","item":"","direction":"","modifiers":[],"confidence":0.9,"rawText":"do they have anything","needsClarification":false,"clarificationQuestion":""},"targetMode":"all"}],"questions":[],"confidence":0.9,"needsClarification":false,"clarificationQuestion":"","rawText":"do they have anything"}`
+	plan, err := NewParser(&fakeGenerator{responses: []string{raw}}).Parse(context.Background(), "do they have anything", game.PerceptionSnapshot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Actions) != 0 || !plan.NeedsClarification || plan.ClarificationQuestion == "" {
+		t.Fatalf("plan = %#v, want clarification without action", plan)
+	}
+}
+
 func TestParseTurnPlanRejectsMoreThanFourActions(t *testing.T) {
 	_, err := ParseTurnPlanJSON(fiveActionPlanJSON)
 	if !errors.Is(err, ErrPlanTooLarge) {

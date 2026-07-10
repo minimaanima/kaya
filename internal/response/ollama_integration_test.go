@@ -59,6 +59,10 @@ func TestOllamaFactLockedResponseDraft(t *testing.T) {
 	if strings.Contains(strings.ToLower(got.Text), "basement door") || strings.Contains(strings.ToLower(got.Text), "monster") {
 		t.Fatalf("response contains unknown named entity: %q", got.Text)
 	}
+	unsupported := response.NewComposer(&responseFakeGenerator{raw: `{"sentences":[{"factIds":["f001","f002","f003","f004","f005"],"text":"The Basement Door is open."}]}`}).Compose(context.Background(), bundle)
+	if !unsupported.UsedFallback || unsupported.FallbackReason != "unknown_entity" {
+		t.Fatalf("unsupported draft = %#v, want unknown_entity fallback", unsupported)
+	}
 }
 
 func responseEnvOrDefault(name, fallback string) string {
@@ -66,4 +70,10 @@ func responseEnvOrDefault(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+type responseFakeGenerator struct{ raw string }
+
+func (f *responseFakeGenerator) GenerateJSON(context.Context, string, string, any) (string, error) {
+	return f.raw, nil
 }

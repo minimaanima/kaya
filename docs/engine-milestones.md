@@ -211,7 +211,7 @@ Exit criteria:
 
 ## Phase 6 - Intent Parser Integration
 
-Phase 6 status: Complete for the first context-aware, multi-action intent slice.
+Phase 6 status: In progress; deterministic coverage is complete, but the Qwen gate and full verification remain pending.
 
 Goal:
 
@@ -242,7 +242,7 @@ Exit criteria:
 
 ## Phase 7 - Kaya Response Generation
 
-Phase 7 status: Complete for the first fact-locked Ollama response slice with deterministic fallback.
+Phase 7 status: In progress; the response gate passes, but the milestone remains pending until the full verification set passes.
 
 Goal:
 

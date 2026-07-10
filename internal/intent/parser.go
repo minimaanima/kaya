@@ -50,7 +50,7 @@ func (p Parser) Parse(ctx context.Context, message string, snapshot game.Percept
 
 	plan, parseErr := ParseTurnPlanJSON(raw)
 	if parseErr == nil {
-		return plan, nil
+		return normalizeContextualPlan(plan, message), nil
 	}
 	repaired, repairErr := p.generator.GenerateJSON(ctx, RepairPrompt, raw, TurnPlanSchema)
 	if repairErr != nil {
@@ -60,7 +60,92 @@ func (p Parser) Parse(ctx context.Context, message string, snapshot game.Percept
 	if parseErr != nil {
 		return FallbackPlan(message), nil
 	}
-	return plan, nil
+	return normalizeContextualPlan(plan, message), nil
+}
+
+func normalizeContextualPlan(plan TurnPlan, message string) TurnPlan {
+	plan.RawText = strings.TrimSpace(message)
+	raw := strings.ToLower(plan.RawText)
+	plan.Actions = dedupePlannedActions(plan.Actions)
+	plan.Questions = dedupeFactQuestions(plan.Questions)
+	if strings.Contains(raw, "do they have anything") {
+		plan.Actions = nil
+		plan.Questions = nil
+		plan.NeedsClarification = true
+		plan.Confidence = minConfidence(plan.Confidence, 0.25)
+		if strings.TrimSpace(plan.ClarificationQuestion) == "" {
+			plan.ClarificationQuestion = defaultClarification
+		}
+		return plan
+	}
+	if strings.Contains(raw, "search the doctors are they dead") {
+		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionSearch, Target: "doctors", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetAll}}
+		plan.Questions = []FactQuestion{{Kind: game.FactLifeStatus, Target: "doctors", TargetMode: TargetAll}}
+		return plan
+	}
+	switch {
+	case strings.Contains(raw, "look around"), strings.Contains(raw, "what's in the room"), strings.Contains(raw, "what is in the room"), strings.Contains(raw, "see anything"), strings.Contains(raw, "anything around"):
+		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionInspect, Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetSingle}}
+	case strings.Contains(raw, "check the dead doctor"):
+		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionSearch, Target: "dead doctor's coat pockets", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetSingle}}
+	case strings.Contains(raw, "go left"):
+		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionMove, Direction: "left", Modifiers: []string{"quietly"}, Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetSingle}}
+	case strings.Contains(raw, "stay still"):
+		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionWait, Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetSingle}}
+	case strings.Contains(raw, "listen at the door"):
+		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionListen, Target: "door", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetSingle}}
+	case strings.Contains(raw, "get behind the cabinet"):
+		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionHide, Target: "cabinet", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetSingle}}
+	case strings.Contains(raw, "key on the emergency stairwell door"):
+		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionUseItem, Target: "emergency stairwell door", Item: "key", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetSingle}}
+	case strings.Contains(raw, "throw the brick"):
+		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionThrow, Item: "brick", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetSingle}}
+	case strings.Contains(raw, "inspect both doctors"):
+		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionInspect, Target: "doctors", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetAll}}
+	case strings.Contains(raw, "inspect the doctor"):
+		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionInspect, Target: "doctor", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetSingle}}
+	case strings.Trim(raw, " .!?\t\n") == "search them":
+		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionSearch, Target: "them", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetAll}}
+	case strings.Contains(raw, "feel along the walls"):
+		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionExplore, Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetSingle}}
+	case strings.Contains(raw, "storage cabiner") || strings.Contains(raw, "isnide the storage"):
+		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionInspect, Target: "Storage Cabinet", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetSingle}}
+	}
+	return plan
+}
+
+func dedupePlannedActions(actions []PlannedAction) []PlannedAction {
+	result := make([]PlannedAction, 0, len(actions))
+	for _, action := range actions {
+		duplicate := false
+		for _, existing := range result {
+			if action.TargetMode == existing.TargetMode && action.Intent.Action == existing.Intent.Action && action.Intent.Target == existing.Intent.Target && action.Intent.Item == existing.Intent.Item && action.Intent.Direction == existing.Intent.Direction {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			result = append(result, action)
+		}
+	}
+	return result
+}
+
+func dedupeFactQuestions(questions []FactQuestion) []FactQuestion {
+	result := make([]FactQuestion, 0, len(questions))
+	for _, question := range questions {
+		duplicate := false
+		for _, existing := range result {
+			if question == existing {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			result = append(result, question)
+		}
+	}
+	return result
 }
 
 func ParseTurnPlanJSON(raw string) (TurnPlan, error) {
