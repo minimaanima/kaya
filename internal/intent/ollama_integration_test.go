@@ -177,6 +177,11 @@ func TestOllamaContextualSemanticTurnPlans(t *testing.T) {
 		}},
 		{name: "explicit both uses all", text: "inspect both doctors", check: requireAllObjectAction(intent.ActionInspect)},
 		{name: "remembered them uses all", text: "search them", check: requireAllObjectAction(intent.ActionSearch)},
+		{name: "unsupported inventory question clarifies", text: "do they have anything", check: func(t *testing.T, plan intent.TurnPlan) {
+			if len(plan.Actions) != 0 || !plan.NeedsClarification || strings.TrimSpace(plan.ClarificationQuestion) == "" {
+				t.Fatalf("plan = %#v, want clarification without actions", plan)
+			}
+		}},
 		{name: "compound search and life question", text: "search the doctors are they dead", check: func(t *testing.T, plan intent.TurnPlan) {
 			if len(plan.Actions) != 1 || plan.Actions[0].Intent.Action != intent.ActionSearch || plan.Actions[0].TargetMode != intent.TargetAll {
 				t.Fatalf("actions = %#v, want one all-target search", plan.Actions)
