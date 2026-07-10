@@ -15,7 +15,7 @@ func FallbackPlan(message string) TurnPlan {
 		intent.Action, intent.Item, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionTurnOn, "flashlight", 0.9, false, ""
 	case (strings.Contains(low, "turn off") || strings.Contains(low, "switch off") || strings.Contains(low, "deactivate")) && (strings.Contains(low, "flashlight") || strings.Contains(low, "torch") || strings.Contains(low, "light")):
 		intent.Action, intent.Item, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionTurnOff, "flashlight", 0.9, false, ""
-	case movementDirection(low) != "":
+	case isMovementMessage(low):
 		intent.Action, intent.Direction, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionMove, movementDirection(low), 0.8, false, ""
 	case isGeneralRoomAwareness(low, "") || strings.Contains(low, "inspect the room"):
 		intent.Action, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionInspect, 0.8, false, ""
@@ -29,6 +29,25 @@ func FallbackPlan(message string) TurnPlan {
 		intent.Action, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionListen, 0.8, false, ""
 	}
 	return TurnPlan{Actions: []PlannedAction{{Intent: intent, TargetMode: TargetSingle}}, Confidence: intent.Confidence, NeedsClarification: intent.NeedsClarification, ClarificationQuestion: intent.ClarificationQuestion, RawText: message}
+}
+
+func isMovementMessage(message string) bool {
+	direction := movementDirection(message)
+	if direction == "" {
+		return false
+	}
+	if containsToken(message, direction) && len(strings.Fields(message)) == 1 {
+		return true
+	}
+	for _, verb := range []string{"go", "move", "walk", "head", "step", "back up", "turn"} {
+		if strings.Contains(verb, " ") && strings.Contains(message, verb) {
+			return true
+		}
+		if !strings.Contains(verb, " ") && containsToken(message, verb) {
+			return true
+		}
+	}
+	return false
 }
 
 func movementDirection(message string) string {
