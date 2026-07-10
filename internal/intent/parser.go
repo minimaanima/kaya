@@ -112,6 +112,9 @@ func ParseTurnPlanJSON(raw string) (TurnPlan, error) {
 		if plan.Actions[i].Intent.Confidence < 0 || plan.Actions[i].Intent.Confidence > 1 {
 			return TurnPlan{}, fmt.Errorf("action confidence %.2f outside range 0..1", plan.Actions[i].Intent.Confidence)
 		}
+		if plan.Actions[i].Intent.Modifiers == nil {
+			plan.Actions[i].Intent.Modifiers = []string{}
+		}
 		plan.Actions[i].Intent = normalizeIntent(plan.Actions[i].Intent)
 	}
 	for i := range plan.Questions {
