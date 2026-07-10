@@ -103,6 +103,13 @@ func TestFactBundlePreservesOptionalVisibleFact(t *testing.T) {
 	}
 }
 
+func TestFactBundleIncludesPlanClarification(t *testing.T) {
+	bundle := (Result{ClarificationQuestion: "What should I inspect?"}).FactBundle("look")
+	if len(bundle.Facts) != 1 || bundle.Facts[0].Kind != game.FactClarification || !bundle.Facts[0].Required {
+		t.Fatalf("facts = %#v, want required clarification", bundle.Facts)
+	}
+}
+
 func newLitStorageState(t *testing.T) *world.State {
 	t.Helper()
 	state := scenario.NewPrototypeWorld()
