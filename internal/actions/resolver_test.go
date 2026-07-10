@@ -191,6 +191,18 @@ func TestTakeItemAddsInventory(t *testing.T) {
 	}
 }
 
+func TestTakeItemRemembersItemReferent(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	resolver := NewResolver(state)
+	resolver.Resolve(intent.Intent{Action: intent.ActionSearch, Target: "desk"})
+	if got := resolver.Resolve(intent.Intent{Action: intent.ActionTakeItem, Target: "flashlight"}); got.Outcome != "item_taken" {
+		t.Fatalf("take outcome = %q", got.Outcome)
+	}
+	if len(state.RecentReferents) == 0 || len(state.RecentReferents[len(state.RecentReferents)-1].ItemIDs) != 1 || state.RecentReferents[len(state.RecentReferents)-1].ItemIDs[0] != scenario.ItemFlashlight {
+		t.Fatalf("recent referents = %#v, want flashlight item group", state.RecentReferents)
+	}
+}
+
 func TestTakeItUsesLastMentionedDiscoveredItem(t *testing.T) {
 	state := scenario.NewPrototypeWorld()
 	resolver := NewResolver(state)

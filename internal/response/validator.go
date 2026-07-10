@@ -13,6 +13,25 @@ import (
 )
 
 var entityRunPattern = regexp.MustCompile(`\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b`)
+var claimTokenPattern = regexp.MustCompile(`[\p{L}\p{N}]+(?:['’][\p{L}]+)?`)
+
+// safeVoiceLexicon contains grammar and ordinary Kaya phrasing that is not a
+// world fact by itself. Every other content token must come from an approved
+// fact field, keeping prose claims conservative and deterministic.
+var safeVoiceLexicon = func() map[string]bool {
+	words := strings.Fields(`a an the i me my we our you your it its this that these those here there now
+	is are was were be been being can cannot could should do does did have has had
+	no not yes and or but if then as so very still only just all both one first second
+	in on at by near beside next to from into of for with without around through inside outside
+	look looked see saw check checked search searched searching find found take took pick picked up
+	hold holding carry carrying move moved go went turn turned use used open closed pass passes
+	seconds second minute minutes`)
+	lexicon := make(map[string]bool, len(words))
+	for _, word := range words {
+		lexicon[word] = true
+	}
+	return lexicon
+}()
 
 func validateDraft(raw string, bundle turn.FactBundle) (ResponseDraft, string) {
 	var draft ResponseDraft
@@ -65,6 +84,9 @@ func validateDraft(raw string, bundle turn.FactBundle) (ResponseDraft, string) {
 	if hasUnknownEntity(draft, bundle) {
 		return ResponseDraft{}, "unknown_entity"
 	}
+	if hasUnsupportedClaim(draft, bundle) {
+		return ResponseDraft{}, "unsupported_claim"
+	}
 	return draft, ""
 }
 
@@ -76,6 +98,25 @@ func hasUnknownEntity(draft ResponseDraft, bundle turn.FactBundle) bool {
 	for _, sentence := range draft.Sentences {
 		for _, candidate := range entityRunPattern.FindAllString(sentence.Text, -1) {
 			if !approvedEntity(candidate, approved) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasUnsupportedClaim(draft ResponseDraft, bundle turn.FactBundle) bool {
+	approved := make(map[string]bool, len(bundle.Facts)*8)
+	for _, fact := range bundle.Facts {
+		for _, field := range []string{fact.Subject, fact.Value, fact.Text} {
+			for _, token := range claimTokenPattern.FindAllString(strings.ToLower(field), -1) {
+				approved[token] = true
+			}
+		}
+	}
+	for _, sentence := range draft.Sentences {
+		for _, token := range claimTokenPattern.FindAllString(strings.ToLower(sentence.Text), -1) {
+			if !approved[token] && !safeVoiceLexicon[token] {
 				return true
 			}
 		}

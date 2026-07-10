@@ -44,6 +44,22 @@ func TestComposerRejectsUnknownNamedEntity(t *testing.T) {
 	}
 }
 
+func TestComposerRejectsUnsupportedLowercaseClaim(t *testing.T) {
+	gen := &fakeGenerator{raw: `{"sentences":[{"factIds":["f001","f002"],"text":"A monster is here. The doctor is dead."}]}`}
+	got := NewComposer(gen).Compose(context.Background(), doctorBundle())
+	if !got.UsedFallback || got.FallbackReason != "unsupported_claim" {
+		t.Fatalf("response = %#v", got)
+	}
+}
+
+func TestComposerRejectsUnsupportedOneWordClaim(t *testing.T) {
+	gen := &fakeGenerator{raw: `{"sentences":[{"factIds":["f001","f002"],"text":"North is open. The doctor is dead."}]}`}
+	got := NewComposer(gen).Compose(context.Background(), doctorBundle())
+	if !got.UsedFallback || got.FallbackReason != "unsupported_claim" {
+		t.Fatalf("response = %#v", got)
+	}
+}
+
 func TestComposerFallsBackOnGeneratorError(t *testing.T) {
 	gen := &fakeGenerator{err: errors.New("offline")}
 	got := NewComposer(gen).Compose(context.Background(), doctorBundle())

@@ -228,7 +228,7 @@ Scope:
 
 Required behavior:
 
-- Parser returns `intent.Intent`.
+- Parser returns `intent.TurnPlan` (a validated sequence of actions and fact questions).
 - Invalid LLM JSON can be repaired or rejected.
 - Low-confidence messages can ask for clarification.
 - Engine never trusts parser output without validation.

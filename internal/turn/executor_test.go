@@ -68,6 +68,20 @@ func TestExecutorInspectsCurrentRoomWithoutTarget(t *testing.T) {
 	}
 }
 
+func TestExecutorExecutesFallbackObjectTargets(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	executor := NewExecutor(state)
+	for _, message := range []string{"search the desk", "take the flashlight"} {
+		result := executor.Execute(intent.FallbackPlan(message))
+		if len(result.Outcomes) != 1 {
+			t.Fatalf("%q outcomes = %#v", message, result.Outcomes)
+		}
+	}
+	if !state.HasItem(scenario.ItemFlashlight) {
+		t.Fatal("fallback take plan did not add flashlight")
+	}
+}
+
 func TestExecutorClarifiesUnresolvedFactQuestionAfterAction(t *testing.T) {
 	state := newLitStorageState(t)
 	result := NewExecutor(state).Execute(intent.TurnPlan{

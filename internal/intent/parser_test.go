@@ -55,6 +55,33 @@ func TestFallbackPlanExploresWalls(t *testing.T) {
 	}
 }
 
+func TestFallbackPlanExtractsObjectTargets(t *testing.T) {
+	tests := []struct {
+		message string
+		action  Action
+		target  string
+	}{
+		{message: "search the desk", action: ActionSearch, target: "desk"},
+		{message: "look through the drawers", action: ActionSearch, target: "drawers"},
+		{message: "look inside the drawers", action: ActionSearch, target: "drawers"},
+		{message: "search for the desk", action: ActionSearch, target: "desk"},
+		{message: "take the flashlight", action: ActionTakeItem, target: "flashlight"},
+		{message: "what is on the desk", action: ActionInspect, target: "desk"},
+		{message: "inspect the cabinet", action: ActionInspect, target: "cabinet"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.message, func(t *testing.T) {
+			plan := FallbackPlan(tt.message)
+			if len(plan.Actions) != 1 || plan.Actions[0].Intent.Action != tt.action {
+				t.Fatalf("plan = %#v", plan)
+			}
+			if got := plan.Actions[0].Intent.Target; got != tt.target {
+				t.Fatalf("Target = %q, want %q", got, tt.target)
+			}
+		})
+	}
+}
+
 func TestParserNormalizesApprovedContextualPhrases(t *testing.T) {
 	valid := func(raw string) string {
 		return `{"actions":[{"intent":{"action":"explore","target":"","item":"","direction":"","modifiers":[],"confidence":0.9,"rawText":"` + raw + `","needsClarification":false,"clarificationQuestion":""},"targetMode":"single"}],"questions":[],"confidence":0.9,"needsClarification":false,"clarificationQuestion":"","rawText":"` + raw + `"}`

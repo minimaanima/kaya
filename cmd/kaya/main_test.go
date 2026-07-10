@@ -173,6 +173,20 @@ func TestRunPlaytestScriptMarksExpectedActionMismatchSuspicious(t *testing.T) {
 	}
 }
 
+func TestRunPlaytestScriptObservesInitialRoomAfterSetup(t *testing.T) {
+	parser := scriptedParser{plans: map[string]intent.TurnPlan{
+		"go north": {Actions: []intent.PlannedAction{{Intent: intent.Intent{Action: intent.ActionMove, Direction: "north"}, TargetMode: intent.TargetSingle}}},
+	}}
+	script := playtestScript{Name: "storage start", InitialRoom: scenario.RoomStorage, InitialLight: true, Steps: []playtestMessage{{Player: "go north"}}}
+	got, err := runPlaytestScript(parser, script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Steps) != 1 || len(got.Steps[0].Result.Outcomes) != 1 || got.Steps[0].Result.Outcomes[0].Result.Outcome != "door_blocked" {
+		t.Fatalf("step = %#v, want observed north exit and blocked door", got.Steps)
+	}
+}
+
 func TestUserRegressionPlaytestTracksDarknessAndPluralFacts(t *testing.T) {
 	plans := map[string]intent.TurnPlan{
 		"what is around you":      roomInspectPlan(),

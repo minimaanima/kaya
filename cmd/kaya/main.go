@@ -337,6 +337,9 @@ func runPlaytestScript(parser turnParser, script playtestScript, composers ...re
 		state.AddInventory(itemID)
 	}
 	state.ActiveLight = script.InitialLight
+	if err := state.ObserveRoom(state.CurrentRoomID, state.PreviousRoomID); err != nil {
+		return playtestScriptLog{}, fmt.Errorf("observe initial room %q: %w", state.CurrentRoomID, err)
+	}
 
 	executor := turn.NewExecutor(state)
 	var composer responseComposer = response.NewComposer(nil)

@@ -288,6 +288,7 @@ func (r Resolver) takeItem(in intent.Intent) game.ActionResult {
 			}
 
 			r.state.AddInventory(itemID)
+			r.state.RememberItems([]game.ItemID{itemID})
 			return makeResult("item_taken", 5, "I pick up "+item.Name+".")
 		}
 	}
