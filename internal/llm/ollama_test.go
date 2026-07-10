@@ -24,6 +24,9 @@ func TestOllamaClientGenerate(t *testing.T) {
 		if request.Format != "json" {
 			t.Fatalf("format = %q, want json", request.Format)
 		}
+		if request.Think == nil || *request.Think {
+			t.Fatalf("think = %v, want explicit false", request.Think)
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"response":"{\"action\":\"wait\"}"}`))

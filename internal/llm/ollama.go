@@ -62,12 +62,14 @@ func WithHTTPClient(httpClient *http.Client) OllamaOption {
 }
 
 func (c *OllamaClient) Generate(ctx context.Context, systemPrompt string, userPrompt string) (string, error) {
+	think := false
 	body := ollamaGenerateRequest{
 		Model:  c.model,
 		System: systemPrompt,
 		Prompt: userPrompt,
 		Stream: false,
 		Format: "json",
+		Think:  &think,
 		Options: map[string]any{
 			"temperature": 0,
 		},
@@ -115,6 +117,7 @@ type ollamaGenerateRequest struct {
 	Prompt  string         `json:"prompt"`
 	Stream  bool           `json:"stream"`
 	Format  string         `json:"format,omitempty"`
+	Think   *bool          `json:"think"`
 	Options map[string]any `json:"options,omitempty"`
 }
 

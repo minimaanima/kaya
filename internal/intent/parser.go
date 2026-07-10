@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 var ErrEmptyMessage = errors.New("empty player message")
@@ -102,6 +103,9 @@ func normalizeIntent(parsed Intent) Intent {
 	parsed.ClarificationQuestion = normalizeEmptyField(parsed.ClarificationQuestion)
 
 	raw := strings.ToLower(strings.TrimSpace(parsed.RawText))
+	if parsed.Item == "" && (containsToken(raw, "flashlight") || containsToken(raw, "torch")) {
+		parsed.Item = "flashlight"
+	}
 	if isVagueFollowUp(raw) {
 		parsed.Action = ActionUnknown
 		parsed.Target = ""
@@ -125,6 +129,10 @@ func normalizeIntent(parsed Intent) Intent {
 		parsed.Direction = strings.ToLower(parsed.Target)
 		parsed.Target = ""
 	}
+	if (parsed.Action == ActionInspect || parsed.Action == ActionSearch) && parsed.Target != "" && parsed.Direction != "" {
+		parsed.Target = strings.TrimSpace(parsed.Target + " " + parsed.Direction)
+		parsed.Direction = ""
+	}
 
 	if (parsed.Action == ActionInspect || parsed.Action == ActionSearch) && isGeneralRoomAwareness(raw, parsed.Target) {
 		parsed.Action = ActionInspect
@@ -136,6 +144,18 @@ func normalizeIntent(parsed Intent) Intent {
 	}
 
 	return parsed
+}
+
+func containsToken(value, wanted string) bool {
+	words := strings.FieldsFunc(value, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	for _, word := range words {
+		if word == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeEmptyField(value string) string {

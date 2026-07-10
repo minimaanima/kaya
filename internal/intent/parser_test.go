@@ -248,3 +248,48 @@ func TestParseJSONNormalizesKeyUse(t *testing.T) {
 		t.Fatalf("Action = %q, want %q", got.Action, ActionUseItem)
 	}
 }
+
+func TestParseJSONRestoresExplicitFlashlightItem(t *testing.T) {
+	got, err := ParseJSON(`{
+		"action": "search",
+		"target": "dead doctor's coat pockets",
+		"item": "",
+		"direction": "",
+		"modifiers": ["keep_light_low"],
+		"confidence": 0.95,
+		"rawText": "Can you check the dead doctor's coat pockets but keep the flashlight low?",
+		"needsClarification": false,
+		"clarificationQuestion": ""
+	}`)
+	if err != nil {
+		t.Fatalf("ParseJSON returned error: %v", err)
+	}
+
+	if got.Item != "flashlight" {
+		t.Fatalf("Item = %q, want flashlight", got.Item)
+	}
+}
+
+func TestParseJSONMergesNonMovementDirectionIntoSearchTarget(t *testing.T) {
+	got, err := ParseJSON(`{
+		"action": "search",
+		"target": "the doctor",
+		"item": "",
+		"direction": "near cabinet",
+		"modifiers": [],
+		"confidence": 0.95,
+		"rawText": "search the doctor near cabinet",
+		"needsClarification": false,
+		"clarificationQuestion": ""
+	}`)
+	if err != nil {
+		t.Fatalf("ParseJSON returned error: %v", err)
+	}
+
+	if got.Target != "the doctor near cabinet" {
+		t.Fatalf("Target = %q, want the doctor near cabinet", got.Target)
+	}
+	if got.Direction != "" {
+		t.Fatalf("Direction = %q, want empty", got.Direction)
+	}
+}
