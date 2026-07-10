@@ -20,7 +20,14 @@ kaya play --seed 12345
 
 The prototype exhaustively proves all nine flashlight/key placement combinations and sweeps seeds `1..1000`. Seed `12345` was also completed end to end through `qwen3.5:4b`, the intent parser, and the real resolver.
 
-Verification note: unit tests, vet, Ollama integration, and the CLI playthrough pass. `go test -race ./...` remains pending because the current Windows toolchain has CGO disabled without GCC, while the installed WSL environment hangs during startup.
+Verification note: unit tests, race tests, vet, Ollama integration, and the CLI playthrough pass. On this Windows machine, race tests use MSYS2 UCRT64 GCC:
+
+```powershell
+$env:PATH="C:\msys64\ucrt64\bin;$env:PATH"
+$env:CGO_ENABLED="1"
+$env:CC="gcc"
+go test -race ./...
+```
 
 Phase 5 adds roguelike variation without allowing broken runs. The key rule is:
 

@@ -185,7 +185,7 @@ Add roguelike variation while keeping puzzles valid.
 
 Status:
 
-Implemented for the first seeded, playability-proven prototype slice. Unit tests, vet, exhaustive placement proof, the 1,000-seed sweep, Qwen intent integration, and a full fixed-seed CLI playthrough pass. Race-detector verification remains pending because the current Windows toolchain has CGO disabled with no GCC, and the installed WSL environment does not start successfully.
+Complete for the first seeded, playability-proven prototype slice. Unit tests, race tests, vet, exhaustive placement proof, the 1,000-seed sweep, Qwen intent integration, and a full fixed-seed CLI playthrough pass.
 
 Scope:
 
