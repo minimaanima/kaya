@@ -47,6 +47,12 @@ func (e Executor) Execute(plan intent.TurnPlan) Result {
 		result.Emotion = e.emotion()
 		return result
 	}
+	if len(plan.Actions) == 0 && len(plan.Questions) == 0 {
+		result.StopReason = "clarification"
+		result.ClarificationQuestion = "What do you want Kaya to do?"
+		result.Emotion = e.emotion()
+		return result
+	}
 	if e.state == nil || e.resolver == nil {
 		result.StopReason = "missing_world"
 		result.ClarificationQuestion = "I cannot read the room state right now."
@@ -65,6 +71,16 @@ func (e Executor) Execute(plan intent.TurnPlan) Result {
 			result.StopReason = "clarification"
 			result.ClarificationQuestion = outcome.Result.ClarificationQuestion
 			stopped = true
+			continue
+		}
+		if planned.Intent.Action == intent.ActionInspect && strings.TrimSpace(planned.Intent.Target) == "" {
+			actionResult := e.resolver.Resolve(planned.Intent)
+			result.Outcomes = append(result.Outcomes, ActionOutcome{Intent: planned.Intent, Result: actionResult})
+			if actionResult.Status != game.ActionSucceeded {
+				result.StopReason = string(actionResult.Status)
+				result.ClarificationQuestion = actionResult.ClarificationQuestion
+				stopped = true
+			}
 			continue
 		}
 
@@ -126,20 +142,33 @@ func (e Executor) Execute(plan intent.TurnPlan) Result {
 		}
 	}
 
-	result.QuestionFacts = e.answerQuestions(plan.Questions)
+	var questionClarification string
+	result.QuestionFacts, questionClarification = e.answerQuestions(plan.Questions)
+	if questionClarification != "" {
+		result.ClarificationQuestion = questionClarification
+		if result.StopReason == "" {
+			result.StopReason = "clarification"
+		}
+	}
 	result.Emotion = e.emotion()
 	return result
 }
 
-func (e Executor) answerQuestions(questions []intent.FactQuestion) []game.Fact {
+func (e Executor) answerQuestions(questions []intent.FactQuestion) ([]game.Fact, string) {
 	facts := make([]game.Fact, 0)
 	if e.state == nil {
-		return facts
+		return facts, "I cannot resolve that question right now."
 	}
 	for _, question := range questions {
 		resolution, err := e.state.ResolveObjectGroup(question.Target, question.TargetMode == intent.TargetAll)
-		if err != nil || resolution.Missing() || resolution.Ambiguous() {
-			continue
+		if err != nil {
+			return facts, "I cannot resolve that question right now."
+		}
+		if resolution.Missing() {
+			return facts, "I do not know what that question refers to yet."
+		}
+		if resolution.Ambiguous() {
+			return facts, ambiguityText(resolution)
 		}
 		for _, object := range resolution.Matches {
 			fact, ok := e.state.ObservedFact(object.ID, question.Kind)
@@ -151,7 +180,7 @@ func (e Executor) answerQuestions(questions []intent.FactQuestion) []game.Fact {
 			facts = append(facts, fact)
 		}
 	}
-	return facts
+	return facts, ""
 }
 
 func (e Executor) emotion() kaya.Emotion {

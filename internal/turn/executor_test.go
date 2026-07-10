@@ -47,6 +47,62 @@ func TestExecutorPreservesFirstTargetWhenSecondRefuses(t *testing.T) {
 	}
 }
 
+func TestExecutorClarifiesEmptyPlan(t *testing.T) {
+	state := newLitStorageState(t)
+	result := NewExecutor(state).Execute(intent.TurnPlan{})
+	if len(result.Outcomes) != 0 {
+		t.Fatalf("outcomes = %#v, want none", result.Outcomes)
+	}
+	if result.StopReason != "clarification" || result.ClarificationQuestion == "" {
+		t.Fatalf("result = %#v, want clarification", result)
+	}
+}
+
+func TestExecutorInspectsCurrentRoomWithoutTarget(t *testing.T) {
+	state := newLitStorageState(t)
+	result := NewExecutor(state).Execute(intent.TurnPlan{
+		Actions: []intent.PlannedAction{{Intent: intent.Intent{Action: intent.ActionInspect}, TargetMode: intent.TargetSingle}},
+	})
+	if len(result.Outcomes) != 1 || result.Outcomes[0].Result.Status != game.ActionSucceeded {
+		t.Fatalf("outcomes = %#v, want successful room inspection", result.Outcomes)
+	}
+}
+
+func TestExecutorClarifiesUnresolvedFactQuestionAfterAction(t *testing.T) {
+	state := newLitStorageState(t)
+	result := NewExecutor(state).Execute(intent.TurnPlan{
+		Actions:   []intent.PlannedAction{{Intent: intent.Intent{Action: intent.ActionSearch, Target: "doctor near door"}, TargetMode: intent.TargetSingle}},
+		Questions: []intent.FactQuestion{{Kind: game.FactLifeStatus, Target: "they", TargetMode: intent.TargetAll}},
+	})
+	if len(result.Outcomes) != 1 || result.Outcomes[0].Result.Status != game.ActionSucceeded {
+		t.Fatalf("outcomes = %#v, want completed action", result.Outcomes)
+	}
+	if result.StopReason != "clarification" || result.ClarificationQuestion == "" {
+		t.Fatalf("result = %#v, want question clarification", result)
+	}
+}
+
+func TestExecutorClarifiesAmbiguousFactQuestion(t *testing.T) {
+	state := newLitStorageState(t)
+	result := NewExecutor(state).Execute(intent.TurnPlan{
+		Questions: []intent.FactQuestion{{Kind: game.FactLifeStatus, Target: "doctor", TargetMode: intent.TargetSingle}},
+	})
+	if result.StopReason != "clarification" || result.ClarificationQuestion == "" {
+		t.Fatalf("result = %#v, want question clarification", result)
+	}
+}
+
+func TestFactBundlePreservesOptionalVisibleFact(t *testing.T) {
+	result := Result{Outcomes: []ActionOutcome{{Result: game.ActionResult{
+		Status:       game.ActionSucceeded,
+		VisibleFacts: []game.Fact{{Kind: game.FactAction, Text: "optional", Required: false}},
+	}}}}
+	bundle := result.FactBundle("look")
+	if len(bundle.Facts) != 1 || bundle.Facts[0].Required {
+		t.Fatalf("facts = %#v, want optional fact preserved", bundle.Facts)
+	}
+}
+
 func newLitStorageState(t *testing.T) *world.State {
 	t.Helper()
 	state := scenario.NewPrototypeWorld()

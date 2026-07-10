@@ -16,7 +16,6 @@ func (r Result) FactBundle(playerMessage string) FactBundle {
 	for _, outcome := range r.Outcomes {
 		hasFailure, hasClarification := false, false
 		for _, fact := range outcome.Result.VisibleFacts {
-			fact.Required = true
 			bundle.Facts = append(bundle.Facts, fact)
 			hasFailure = hasFailure || fact.Kind == game.FactFailure
 			hasClarification = hasClarification || fact.Kind == game.FactClarification
