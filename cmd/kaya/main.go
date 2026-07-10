@@ -3,8 +3,12 @@ package main
 import (
 	"bufio"
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/binary"
 	"encoding/json"
+	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,13 +20,17 @@ import (
 	"kaya/internal/intent"
 	kayastate "kaya/internal/kaya"
 	"kaya/internal/llm"
+	"kaya/internal/rungen"
+	"kaya/internal/runscenario"
 	"kaya/internal/scenario"
 	"kaya/internal/world"
 )
 
+const defaultOllamaModel = "qwen3.5:4b"
+
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("usage: kaya <intent|play> [player message]")
+		fmt.Println("usage: kaya <intent|play|playtest>")
 		return
 	}
 
@@ -33,7 +41,7 @@ func main() {
 			os.Exit(1)
 		}
 	case "play":
-		if err := runPlay(); err != nil {
+		if err := runPlay(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -54,7 +62,7 @@ func runIntent(args []string) error {
 		return fmt.Errorf("usage: kaya intent <player message>")
 	}
 
-	model := envOrDefault("KAYA_OLLAMA_MODEL", "mistral:latest")
+	model := envOrDefault("KAYA_OLLAMA_MODEL", defaultOllamaModel)
 	baseURL := envOrDefault("KAYA_OLLAMA_URL", llm.DefaultOllamaURL)
 
 	client, err := llm.NewOllamaClient(model, llm.WithOllamaBaseURL(baseURL))
@@ -77,8 +85,23 @@ func runIntent(args []string) error {
 	return nil
 }
 
-func runPlay() error {
-	model := envOrDefault("KAYA_OLLAMA_MODEL", "mistral:latest")
+func runPlay(args []string) error {
+	options, err := parsePlayOptions(args, newRunSeed)
+	if err != nil {
+		return err
+	}
+	run, err := rungen.Generate(
+		rungen.RunConfig{
+			Seed:             options.Seed,
+			GeneratorVersion: rungen.CurrentGeneratorVersion,
+		},
+		runscenario.PrototypeDefinition(),
+	)
+	if err != nil {
+		return fmt.Errorf("generate run: %w", err)
+	}
+
+	model := envOrDefault("KAYA_OLLAMA_MODEL", defaultOllamaModel)
 	baseURL := envOrDefault("KAYA_OLLAMA_URL", llm.DefaultOllamaURL)
 
 	client, err := llm.NewOllamaClient(model, llm.WithOllamaBaseURL(baseURL))
@@ -87,10 +110,11 @@ func runPlay() error {
 	}
 
 	parser := intent.NewParser(client)
-	state := scenario.NewPrototypeWorld()
+	state := run.State
 	resolver := actions.NewResolver(state)
 	scanner := bufio.NewScanner(os.Stdin)
 
+	printRunDebug(os.Stdout, run)
 	fmt.Println("Connection established.")
 	fmt.Println("Kaya: I can read you. I am in reception. The ceiling is cracked, but I can move.")
 	fmt.Println("Type naturally. Use 'quit' or 'exit' to stop.")
@@ -135,7 +159,7 @@ func runPlay() error {
 }
 
 func runPlaytest() error {
-	model := envOrDefault("KAYA_OLLAMA_MODEL", "mistral:latest")
+	model := envOrDefault("KAYA_OLLAMA_MODEL", defaultOllamaModel)
 	baseURL := envOrDefault("KAYA_OLLAMA_URL", llm.DefaultOllamaURL)
 
 	client, err := llm.NewOllamaClient(model, llm.WithOllamaBaseURL(baseURL))
@@ -171,6 +195,83 @@ func runPlaytest() error {
 		}
 	}
 	return nil
+}
+
+type playOptions struct {
+	Seed int64
+}
+
+func parsePlayOptions(args []string, generateSeed func() (int64, error)) (playOptions, error) {
+	flags := flag.NewFlagSet("play", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	seed := flags.Int64("seed", 0, "reproducible run seed")
+	if err := flags.Parse(args); err != nil {
+		return playOptions{}, err
+	}
+	if flags.NArg() != 0 {
+		return playOptions{}, fmt.Errorf("usage: kaya play [--seed <int64>]")
+	}
+
+	provided := false
+	flags.Visit(func(current *flag.Flag) {
+		if current.Name == "seed" {
+			provided = true
+		}
+	})
+	if provided {
+		return playOptions{Seed: *seed}, nil
+	}
+
+	generated, err := generateSeed()
+	if err != nil {
+		return playOptions{}, err
+	}
+	return playOptions{Seed: generated}, nil
+}
+
+func newRunSeed() (int64, error) {
+	return readRunSeed(cryptorand.Reader)
+}
+
+func readRunSeed(reader io.Reader) (int64, error) {
+	const positiveMask = ^uint64(0) >> 1
+	for {
+		var value [8]byte
+		if _, err := io.ReadFull(reader, value[:]); err != nil {
+			return 0, fmt.Errorf("generate run seed: %w", err)
+		}
+		seed := int64(binary.LittleEndian.Uint64(value[:]) & positiveMask)
+		if seed != 0 {
+			return seed, nil
+		}
+	}
+}
+
+func printRunDebug(writer io.Writer, run rungen.GeneratedRun) {
+	fmt.Fprintf(writer, "Run seed: %d\n", run.Seed)
+	fmt.Fprintf(writer, "Generator: %d\n", run.GeneratorVersion)
+
+	placements := append([]rungen.Placement(nil), run.Placements...)
+	sort.Slice(placements, func(i, j int) bool {
+		return placements[i].ItemID < placements[j].ItemID
+	})
+	for _, placement := range placements {
+		itemName := string(placement.ItemID)
+		if item, ok := run.State.Items[placement.ItemID]; ok {
+			itemName = item.Name
+		}
+		objectName := string(placement.ObjectID)
+		if object, ok := run.State.Objects[placement.ObjectID]; ok {
+			objectName = object.Name
+		}
+		fmt.Fprintf(writer, "%s: %s\n", itemName, objectName)
+	}
+	fmt.Fprintf(
+		writer,
+		"Validation: playable (%d witness steps, %d states)\n",
+		len(run.Validation.Witness),
+		run.Validation.VisitedStates,
+	)
 }
 
 func runPlaytestScript(parser intent.Parser, script playtestScript) (playtestScriptLog, error) {
