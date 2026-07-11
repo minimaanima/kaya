@@ -2,6 +2,7 @@ package intent_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -218,6 +219,53 @@ func TestOllamaContextualSemanticTurnPlans(t *testing.T) {
 	}
 }
 
+func TestOllamaIntentCorpus(t *testing.T) {
+	if !truthyEnv("KAYA_OLLAMA_EVAL") {
+		t.Skip("set KAYA_OLLAMA_EVAL=1 to run the Ollama intent corpus")
+	}
+	model := envOrDefault("KAYA_OLLAMA_MODEL", "qwen3.5:4b")
+	baseURL := envOrDefault("KAYA_OLLAMA_URL", llm.DefaultOllamaURL)
+	client, err := llm.NewOllamaClient(model, llm.WithOllamaBaseURL(baseURL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parser := intent.NewParser(client)
+	eval := corpusEvaluation{Total: len(intentCorpus)}
+
+	for _, tc := range intentCorpus {
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		plan, parseErr := parser.Parse(ctx, tc.Message, game.PerceptionSnapshot{})
+		cancel()
+		if parseErr != nil {
+			eval.RecordError(fmt.Sprintf("%s (%q): %v", tc.Name, tc.Message, parseErr))
+			continue
+		}
+		got := semanticPlanFrom(plan)
+		if validErr := validateSemanticPlan(got); validErr != nil {
+			eval.RecordError(fmt.Sprintf("%s (%q): invalid plan: %v", tc.Name, tc.Message, validErr))
+			continue
+		}
+		if diff := compareSemanticPlans(tc.Want, got); diff != "" {
+			eval.RecordMismatch(fmt.Sprintf("%s (%q):\n%s", tc.Name, tc.Message, diff))
+			continue
+		}
+		eval.RecordMatch()
+	}
+
+	for _, mismatch := range eval.Mismatches {
+		t.Logf("MISMATCH: %s", mismatch)
+	}
+	for _, parseError := range eval.Errors {
+		t.Logf("ERROR: %s", parseError)
+	}
+	t.Logf("intent corpus: %d/%d exact matches, %d mismatches, %d errors, %.1f%% accuracy",
+		eval.Matches, eval.Total, len(eval.Mismatches), len(eval.Errors), eval.Accuracy())
+	if eval.Fails(90) {
+		t.Fatalf("Ollama intent corpus failed: accuracy %.1f%%, threshold 90.0%%, errors %d",
+			eval.Accuracy(), len(eval.Errors))
+	}
+}
+
 func requireAllObjectAction(action intent.Action) func(*testing.T, intent.TurnPlan) {
 	return func(t *testing.T, plan intent.TurnPlan) {
 		if len(plan.Actions) != 1 || plan.Actions[0].Intent.Action != action || plan.Actions[0].TargetMode != intent.TargetAll {
@@ -233,6 +281,15 @@ func containsString(values []string, expected string) bool {
 		}
 	}
 	return false
+}
+
+func truthyEnv(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func envOrDefault(name string, fallback string) string {

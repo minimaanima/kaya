@@ -36,6 +36,34 @@ type intentCorpusCase struct {
 	Want    corpusPlan
 }
 
+type corpusEvaluation struct {
+	Total      int
+	Matches    int
+	Mismatches []string
+	Errors     []string
+}
+
+func (e *corpusEvaluation) RecordMatch() { e.Matches++ }
+
+func (e *corpusEvaluation) RecordMismatch(message string) {
+	e.Mismatches = append(e.Mismatches, message)
+}
+
+func (e *corpusEvaluation) RecordError(message string) {
+	e.Errors = append(e.Errors, message)
+}
+
+func (e corpusEvaluation) Accuracy() float64 {
+	if e.Total == 0 {
+		return 0
+	}
+	return 100 * float64(e.Matches) / float64(e.Total)
+}
+
+func (e corpusEvaluation) Fails(threshold float64) bool {
+	return len(e.Errors) > 0 || e.Accuracy() < threshold
+}
+
 func action(kind intent.Action, target string) corpusAction {
 	return corpusAction{Action: kind, Target: target, TargetMode: intent.TargetSingle}
 }
@@ -191,5 +219,30 @@ func TestDeterministicIntentCorpus(t *testing.T) {
 				t.Fatalf("message %q mismatch:\n%s", tc.Message, diff)
 			}
 		})
+	}
+}
+
+func TestCorpusEvaluationCountsMatchesAndErrors(t *testing.T) {
+	eval := corpusEvaluation{Total: 3}
+	eval.RecordMatch()
+	eval.RecordMismatch("wrong action")
+	eval.RecordError("timeout")
+
+	if eval.Matches != 1 || len(eval.Mismatches) != 1 || len(eval.Errors) != 1 {
+		t.Fatalf("evaluation = %#v", eval)
+	}
+	if got := eval.Accuracy(); got != 100.0/3.0 {
+		t.Fatalf("accuracy = %f, want %f", got, 100.0/3.0)
+	}
+}
+
+func TestCorpusEvaluationFailsBelowThreshold(t *testing.T) {
+	eval := corpusEvaluation{Total: 10, Matches: 8}
+	if !eval.Fails(90) {
+		t.Fatal("80 percent evaluation should fail a 90 percent threshold")
+	}
+	eval.Matches = 9
+	if eval.Fails(90) {
+		t.Fatal("90 percent evaluation should pass a 90 percent threshold")
 	}
 }
