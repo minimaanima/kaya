@@ -174,13 +174,7 @@ func canonicalFallbackPlan(plan TurnPlan, message string) (TurnPlan, bool) {
 		return local, true
 	}
 	for i := range local.Actions {
-		model := plan.Actions[i]
-		if modifiers := model.Intent.Modifiers; len(modifiers) > 0 {
-			local.Actions[i].Intent.Modifiers = append([]string(nil), modifiers...)
-		}
-		if isRefinedCanonicalField(model.Intent.Target, local.Actions[i].Intent.Target) {
-			local.Actions[i].Intent.Target = model.Intent.Target
-		}
+		local.Actions[i] = mergeCanonicalAction(local.Actions[i], plan.Actions[i])
 	}
 	if len(local.Actions) == 1 && local.Actions[0].Intent.Action == ActionInspect && strings.Contains(normalizePlayerText(message), "doctors") {
 		local.Actions[0].TargetMode = TargetAll
@@ -205,6 +199,49 @@ func isRefinedCanonicalField(value, canonical string) bool {
 	value = normalizePlayerText(value)
 	canonical = normalizePlayerText(canonical)
 	return canonical != "" && value != canonical && strings.Contains(value, canonical)
+}
+
+func mergeCanonicalAction(canonical, model PlannedAction) PlannedAction {
+	if modifiers := model.Intent.Modifiers; len(modifiers) > 0 {
+		canonical.Intent.Modifiers = append([]string(nil), modifiers...)
+	}
+	if isRefinedCanonicalField(model.Intent.Target, canonical.Intent.Target) {
+		canonical.Intent.Target = model.Intent.Target
+	}
+	if preservesCompatibleItem(canonical.Intent.Action, canonical.Intent.Item, model.Intent.Item) {
+		canonical.Intent.Item = model.Intent.Item
+	}
+	if preservesCompatibleDirection(canonical.Intent.Action, canonical.Intent.Direction, model.Intent.Direction) {
+		canonical.Intent.Direction = model.Intent.Direction
+	}
+	if targetModesCompatible(canonical, model) {
+		canonical.TargetMode = model.TargetMode
+	}
+	return canonical
+}
+
+func preservesCompatibleItem(action Action, canonical, model string) bool {
+	if strings.TrimSpace(canonical) != "" || strings.TrimSpace(model) == "" {
+		return false
+	}
+	switch action {
+	case ActionInspect, ActionSearch:
+		return true
+	default:
+		return false
+	}
+}
+
+func preservesCompatibleDirection(action Action, canonical, model string) bool {
+	return action == ActionMove && strings.TrimSpace(canonical) == "" && strings.TrimSpace(model) != ""
+}
+
+func targetModesCompatible(canonical, model PlannedAction) bool {
+	if canonical.TargetMode != model.TargetMode {
+		return false
+	}
+	return canonical.TargetMode == TargetSingle ||
+		(canonical.TargetMode == TargetAll && allowsTargetAll(canonical.Intent.Action))
 }
 
 func preservesRepeatedWait(plan TurnPlan, local TurnPlan, message string) bool {

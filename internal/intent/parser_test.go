@@ -470,6 +470,65 @@ func TestParserKeepsCompatibleModelModifiersWithCanonicalFallbackFields(t *testi
 	}
 }
 
+func TestMergeCanonicalActionSemantics(t *testing.T) {
+	tests := []struct {
+		name      string
+		canonical PlannedAction
+		model     PlannedAction
+		want      PlannedAction
+	}{
+		{
+			name:      "preserves compatible search item",
+			canonical: modelAction(ActionSearch, "pockets", "", ""),
+			model:     modelAction(ActionSearch, "pockets", "flashlight", ""),
+			want:      modelAction(ActionSearch, "pockets", "flashlight", ""),
+		},
+		{
+			name:      "preserves compatible move direction",
+			canonical: modelAction(ActionMove, "", "", ""),
+			model:     modelAction(ActionMove, "", "", "east"),
+			want:      modelAction(ActionMove, "", "", "east"),
+		},
+		{
+			name:      "rejects conflicting item",
+			canonical: modelAction(ActionSearch, "desk", "key", ""),
+			model:     modelAction(ActionSearch, "desk", "flashlight", ""),
+			want:      modelAction(ActionSearch, "desk", "key", ""),
+		},
+		{
+			name:      "rejects conflicting direction",
+			canonical: modelAction(ActionMove, "", "", "east"),
+			model:     modelAction(ActionMove, "", "", "west"),
+			want:      modelAction(ActionMove, "", "", "east"),
+		},
+		{
+			name:      "preserves compatible all target mode",
+			canonical: allTargets(modelAction(ActionSearch, "both", "", "")),
+			model:     allTargets(modelAction(ActionSearch, "both", "", "")),
+			want:      allTargets(modelAction(ActionSearch, "both", "", "")),
+		},
+		{
+			name:      "rejects conflicting all target mode",
+			canonical: modelAction(ActionSearch, "desk", "", ""),
+			model:     allTargets(modelAction(ActionSearch, "desk", "", "")),
+			want:      modelAction(ActionSearch, "desk", "", ""),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := mergeCanonicalAction(tt.canonical, tt.model); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("action = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func allTargets(action PlannedAction) PlannedAction {
+	action.TargetMode = TargetAll
+	return action
+}
+
 func modelAction(action Action, target, item, direction string, modifiers ...string) PlannedAction {
 	return PlannedAction{
 		Intent: Intent{
@@ -569,6 +628,9 @@ func TestParserParseValidIntent(t *testing.T) {
 	}
 	if got.Actions[0].Intent.Target != "dead doctor coat pockets" {
 		t.Fatalf("Target = %q, want dead doctor coat pockets", got.Actions[0].Intent.Target)
+	}
+	if got.Actions[0].Intent.Item != "flashlight" {
+		t.Fatalf("Item = %q, want flashlight", got.Actions[0].Intent.Item)
 	}
 	if generator.calls != 1 {
 		t.Fatalf("generator calls = %d, want 1", generator.calls)
