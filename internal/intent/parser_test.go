@@ -2,7 +2,9 @@ package intent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -400,6 +402,105 @@ func TestParserNormalizesUnsupportedQuestionToClarification(t *testing.T) {
 	if len(plan.Actions) != 0 || !plan.NeedsClarification || plan.ClarificationQuestion == "" {
 		t.Fatalf("plan = %#v, want clarification without action", plan)
 	}
+}
+
+func TestParserCanonicalizesRecognizedFallbackCommands(t *testing.T) {
+	tests := []struct {
+		name    string
+		message string
+		model   PlannedAction
+	}{
+		{
+			name:    "room awareness wrong action",
+			message: "whats around you",
+			model:   modelAction(ActionExplore, "room", "", "all"),
+		},
+		{
+			name:    "room inspection canonical target",
+			message: "Inspect the room.",
+			model:   modelAction(ActionInspect, "room", "", ""),
+		},
+		{
+			name:    "take item canonical fields",
+			message: "take the flashlight",
+			model:   modelAction(ActionTakeItem, "all", "flashlight", ""),
+		},
+		{
+			name:    "movement wrong action",
+			message: "go east",
+			model:   modelAction(ActionExplore, "all", "", "east"),
+		},
+		{
+			name:    "throw target canonical field",
+			message: "throw the brick down the hallway",
+			model:   modelAction(ActionThrow, "", "brick", ""),
+		},
+		{
+			name:    "ambiguous intent question",
+			message: "what do you have in mind",
+			model:   modelAction(ActionTalk, "inventory", "", ""),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := NewParser(&fakeGenerator{responses: []string{modelPlanJSON(t, tt.message, tt.model)}}).Parse(context.Background(), tt.message, game.PerceptionSnapshot{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := FallbackPlan(tt.message); !reflect.DeepEqual(got, want) {
+				t.Fatalf("plan = %#v, want canonical fallback %#v", got, want)
+			}
+		})
+	}
+}
+
+func TestParserKeepsCompatibleModelModifiersWithCanonicalFallbackFields(t *testing.T) {
+	message := "take the flashlight"
+	model := modelAction(ActionTakeItem, "all", "flashlight", "", "carefully")
+	got, err := NewParser(&fakeGenerator{responses: []string{modelPlanJSON(t, message, model)}}).Parse(context.Background(), message, game.PerceptionSnapshot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := FallbackPlan(message)
+	want.Actions[0].Intent.Modifiers = []string{"carefully"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("plan = %#v, want canonical fallback with modifier %#v", got, want)
+	}
+}
+
+func modelAction(action Action, target, item, direction string, modifiers ...string) PlannedAction {
+	return PlannedAction{
+		Intent: Intent{
+			Action:     action,
+			Target:     target,
+			Item:       item,
+			Direction:  direction,
+			Modifiers:  append([]string{}, modifiers...),
+			Confidence: 0.9,
+		},
+		TargetMode: TargetSingle,
+	}
+}
+
+func modelPlanJSON(t *testing.T, message string, actions ...PlannedAction) string {
+	t.Helper()
+	for i := range actions {
+		actions[i].Intent.RawText = message
+	}
+	encoded, err := json.Marshal(TurnPlan{
+		Actions:               actions,
+		Questions:             []FactQuestion{},
+		Confidence:            0.9,
+		NeedsClarification:    false,
+		ClarificationQuestion: "",
+		RawText:               message,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(encoded)
 }
 
 func TestParseTurnPlanRejectsMoreThanFourActions(t *testing.T) {

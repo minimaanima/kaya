@@ -82,6 +82,9 @@ func normalizeContextualPlan(plan TurnPlan, message string) TurnPlan {
 			return fallback
 		}
 	}
+	if canonical, ok := canonicalFallbackPlan(plan, message); ok {
+		return canonical
+	}
 	if local, ok := compoundFallbackPlan(message); ok {
 		if shouldUseLocalCompoundPlan(plan, local) {
 			return local
@@ -157,6 +160,78 @@ func normalizeContextualPlan(plan TurnPlan, message string) TurnPlan {
 		forceSingle(Intent{Action: ActionInspect, Target: extractObjectTarget(message)}, TargetSingle)
 	}
 	return normalizePlanTargetModes(plan)
+}
+
+func canonicalFallbackPlan(plan TurnPlan, message string) (TurnPlan, bool) {
+	local := FallbackPlan(message)
+	if !isCanonicalFallback(local, message) {
+		return TurnPlan{}, false
+	}
+	if preservesRepeatedWait(plan, local, message) {
+		return plan, true
+	}
+	if !hasCompatibleFallbackActions(plan, local) {
+		return local, true
+	}
+	for i := range local.Actions {
+		model := plan.Actions[i]
+		if modifiers := model.Intent.Modifiers; len(modifiers) > 0 {
+			local.Actions[i].Intent.Modifiers = append([]string(nil), modifiers...)
+		}
+		if isRefinedCanonicalField(model.Intent.Target, local.Actions[i].Intent.Target) {
+			local.Actions[i].Intent.Target = model.Intent.Target
+		}
+	}
+	if len(local.Actions) == 1 && local.Actions[0].Intent.Action == ActionInspect && strings.Contains(normalizePlayerText(message), "doctors") {
+		local.Actions[0].TargetMode = TargetAll
+	}
+	return local, true
+}
+
+func isCanonicalFallback(plan TurnPlan, message string) bool {
+	if !plan.NeedsClarification {
+		return plan.Confidence > 0 && len(plan.Actions) > 0
+	}
+	return isOpenEndedIntentQuestion(message)
+}
+
+func isOpenEndedIntentQuestion(message string) bool {
+	raw := normalizePlayerText(message)
+	return strings.Contains(raw, "in mind") &&
+		(strings.HasPrefix(raw, "what ") || strings.HasPrefix(raw, "whats "))
+}
+
+func isRefinedCanonicalField(value, canonical string) bool {
+	value = normalizePlayerText(value)
+	canonical = normalizePlayerText(canonical)
+	return canonical != "" && value != canonical && strings.Contains(value, canonical)
+}
+
+func preservesRepeatedWait(plan TurnPlan, local TurnPlan, message string) bool {
+	if len(local.Actions) != 1 || local.Actions[0].Intent.Action != ActionWait || len(plan.Actions) < 2 || len(plan.Questions) != 0 {
+		return false
+	}
+	if !strings.Contains(normalizePlayerText(message), "twice") {
+		return false
+	}
+	for _, action := range plan.Actions {
+		if action.Intent.Action != ActionWait {
+			return false
+		}
+	}
+	return true
+}
+
+func hasCompatibleFallbackActions(plan TurnPlan, local TurnPlan) bool {
+	if plan.NeedsClarification || len(plan.Actions) != len(local.Actions) || len(plan.Questions) != len(local.Questions) {
+		return false
+	}
+	for i, localAction := range local.Actions {
+		if plan.Actions[i].Intent.Action != localAction.Intent.Action {
+			return false
+		}
+	}
+	return true
 }
 
 func shouldUseLocalCompoundPlan(plan TurnPlan, local TurnPlan) bool {

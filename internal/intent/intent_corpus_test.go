@@ -245,4 +245,8 @@ func TestCorpusEvaluationFailsBelowThreshold(t *testing.T) {
 	if eval.Fails(90) {
 		t.Fatal("90 percent evaluation should pass a 90 percent threshold")
 	}
+	eval.Errors = []string{"timeout"}
+	if !eval.Fails(90) {
+		t.Fatal("evaluation with errors should fail even at the threshold")
+	}
 }
