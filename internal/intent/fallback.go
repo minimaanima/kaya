@@ -1,6 +1,10 @@
 package intent
 
-import "strings"
+import (
+	"strings"
+
+	"kaya/internal/game"
+)
 
 const defaultClarification = "What do you want Kaya to do?"
 
@@ -18,6 +22,17 @@ func fallbackSinglePlan(message string) TurnPlan {
 	intent := Intent{Action: ActionUnknown, Confidence: 0, RawText: message, Modifiers: []string{}, NeedsClarification: true, ClarificationQuestion: defaultClarification}
 	targetMode := TargetSingle
 	switch {
+	case isLifeStatusSearch(low):
+		return TurnPlan{
+			Actions: []PlannedAction{{
+				Intent: Intent{Action: ActionSearch, Target: "doctors", Confidence: 0.8,
+					RawText: message, Modifiers: []string{}},
+				TargetMode: TargetAll,
+			}},
+			Questions:  []FactQuestion{{Kind: game.FactLifeStatus, Target: "doctors", TargetMode: TargetAll}},
+			Confidence: 0.8,
+			RawText:    message,
+		}
 	case isPluralReferentSelection(low):
 		intent.Action, intent.Target, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionSearch, pluralReferentTarget(low), 0.8, false, ""
 		targetMode = TargetAll
@@ -40,10 +55,18 @@ func fallbackSinglePlan(message string) TurnPlan {
 		intent.Action, intent.Target, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionSearch, extractContainerQuestionTarget(message), 0.75, false, ""
 	case isFallbackItemLocationQuestion(low) || isFallbackItemPresenceQuestion(low):
 		intent.Action, intent.Item, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionTalk, fallbackMentionedItem(low), 0.75, false, ""
-	case isObjectInspectMessage(low):
+	case isObjectInspectMessage(low) && !strings.Contains(low, "inspect the room"):
 		intent.Action, intent.Target, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionInspect, extractObjectTarget(message), 0.8, false, ""
 	case isGeneralRoomAwareness(low, "") || strings.Contains(low, "inspect the room"):
 		intent.Action, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionInspect, 0.8, false, ""
+	case strings.Contains(low, "hide"):
+		intent.Action, intent.Target, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionHide, extractHideTarget(message), 0.8, false, ""
+	case strings.Contains(low, "throw"):
+		intent.Item, intent.Target = extractThrowParts(message)
+		intent.Action, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionThrow, 0.8, false, ""
+	case strings.Contains(low, "use") && strings.Contains(low, " on "):
+		intent.Item, intent.Target = extractUseItemParts(message)
+		intent.Action, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionUseItem, 0.8, false, ""
 	case isSearchMessage(low):
 		intent.Action, intent.Target, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionSearch, extractSearchTarget(message), 0.7, false, ""
 	case strings.Contains(low, "pick up") || strings.Contains(low, "take ") || strings.HasPrefix(low, "take") || strings.Contains(low, "grab "):
@@ -51,7 +74,7 @@ func fallbackSinglePlan(message string) TurnPlan {
 	case strings.Contains(low, "wait") || strings.Contains(low, "stay still") || strings.Contains(low, "pause"):
 		intent.Action, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionWait, 0.9, false, ""
 	case strings.Contains(low, "listen") || strings.Contains(low, "hear"):
-		intent.Action, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionListen, 0.8, false, ""
+		intent.Action, intent.Target, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionListen, extractListenTarget(message), 0.8, false, ""
 	}
 	return TurnPlan{Actions: []PlannedAction{{Intent: intent, TargetMode: targetMode}}, Confidence: intent.Confidence, NeedsClarification: intent.NeedsClarification, ClarificationQuestion: intent.ClarificationQuestion, RawText: message}
 }
@@ -112,7 +135,7 @@ func splitSequentialClauses(message string) []string {
 
 func isPluralReferentSelection(message string) bool {
 	switch strings.Trim(message, " .!?") {
-	case "both", "both of them", "them", "all of them":
+	case "both", "both of them", "them", "all", "all of them":
 		return true
 	default:
 		return false
@@ -122,6 +145,9 @@ func isPluralReferentSelection(message string) bool {
 func pluralReferentTarget(message string) string {
 	if strings.Contains(message, "both") {
 		return "both"
+	}
+	if strings.Trim(message, " .!?") == "all" {
+		return "all"
 	}
 	return "them"
 }
@@ -238,21 +264,57 @@ func extractTakeTarget(message string) string {
 	return target
 }
 
+func extractListenTarget(message string) string {
+	return extractTarget(message, []string{"listen at"})
+}
+
+func extractHideTarget(message string) string {
+	target := extractTarget(message, []string{"get behind", "hide behind"})
+	if split := strings.Index(target, " and hide"); split >= 0 {
+		target = target[:split]
+	}
+	return strings.TrimSpace(target)
+}
+
+func extractThrowParts(message string) (item string, target string) {
+	low := normalizePlayerText(message)
+	index := findCue(low, "throw")
+	if index < 0 {
+		return "", ""
+	}
+	rest := strings.TrimSpace(low[index+len("throw"):])
+	if split := strings.Index(rest, " down "); split >= 0 {
+		item = cleanTargetPrefix(rest[:split])
+		target = cleanTargetPrefix(rest[split+len(" down "):])
+	}
+	return item, target
+}
+
+func extractUseItemParts(message string) (item string, target string) {
+	low := normalizePlayerText(message)
+	index := findCue(low, "use")
+	if index < 0 {
+		return "", ""
+	}
+	rest := strings.TrimSpace(low[index+len("use"):])
+	split := strings.Index(rest, " on ")
+	if split < 0 {
+		return "", ""
+	}
+	return cleanTargetPrefix(rest[:split]), cleanTargetPrefix(rest[split+len(" on "):])
+}
+
+func isLifeStatusSearch(message string) bool {
+	return strings.Contains(message, "search the doctors are they dead")
+}
+
 func extractTarget(message string, cues []string) string {
 	low := normalizePlayerText(message)
 	for _, cue := range cues {
 		if index := findCue(low, cue); index >= 0 {
 			target := strings.TrimSpace(low[index+len(cue):])
 			target = strings.Trim(target, " \t.,!?;:'\"")
-			for {
-				before := target
-				for _, article := range []string{"the ", "a ", "an ", "your ", "for "} {
-					target = strings.TrimPrefix(target, article)
-				}
-				if target == before {
-					break
-				}
-			}
+			target = cleanTargetPrefix(target)
 			if split := strings.Index(target, " are they"); split >= 0 {
 				target = target[:split]
 			}
@@ -260,6 +322,19 @@ func extractTarget(message string, cues []string) string {
 		}
 	}
 	return ""
+}
+
+func cleanTargetPrefix(target string) string {
+	target = strings.TrimSpace(target)
+	for {
+		before := target
+		for _, prefix := range []string{"through the ", "through ", "the ", "a ", "an ", "your ", "for "} {
+			target = strings.TrimPrefix(target, prefix)
+		}
+		if target == before {
+			return target
+		}
+	}
 }
 
 func findCue(value string, cue string) int {
