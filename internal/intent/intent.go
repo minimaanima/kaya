@@ -17,6 +17,7 @@ const (
 	ActionForceOpen Action = "force_open"
 	ActionTurnOn    Action = "turn_on"
 	ActionTurnOff   Action = "turn_off"
+	ActionExplore   Action = "explore"
 )
 
 type Intent struct {
@@ -50,7 +51,8 @@ func (a Action) Valid() bool {
 		ActionThrow,
 		ActionForceOpen,
 		ActionTurnOn,
-		ActionTurnOff:
+		ActionTurnOff,
+		ActionExplore:
 		return true
 	default:
 		return false

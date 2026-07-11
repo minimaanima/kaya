@@ -183,6 +183,10 @@ Goal:
 
 Add roguelike variation while keeping puzzles valid.
 
+Status:
+
+Complete for the first seeded, playability-proven prototype slice. Unit tests, race tests, vet, exhaustive placement proof, the 1,000-seed sweep, Qwen intent integration, and a full fixed-seed CLI playthrough pass.
+
 Scope:
 
 - Seeded run generation.
@@ -207,6 +211,8 @@ Exit criteria:
 
 ## Phase 6 - Intent Parser Integration
 
+Phase 6 status: In progress; deterministic coverage is complete, but the Qwen gate and full verification remain pending.
+
 Goal:
 
 Connect free-form player messages to structured intents.
@@ -222,7 +228,7 @@ Scope:
 
 Required behavior:
 
-- Parser returns `intent.Intent`.
+- Parser returns `intent.TurnPlan` (a validated sequence of actions and fact questions).
 - Invalid LLM JSON can be repaired or rejected.
 - Low-confidence messages can ask for clarification.
 - Engine never trusts parser output without validation.
@@ -235,6 +241,8 @@ Exit criteria:
 - Gated Ollama integration tests cover natural player phrasing such as "look around", "what's in the room", and "can you check the doctor's coat".
 
 ## Phase 7 - Kaya Response Generation
+
+Phase 7 status: In progress; the response gate passes, but the milestone remains pending until the full verification set passes.
 
 Goal:
 

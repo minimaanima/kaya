@@ -1,5 +1,34 @@
 # Phase 5 - Randomized Run Generation Plan
 
+## Implementation Status
+
+The first focused slice is implemented:
+
+```text
+versioned SplitMix64 seed
++ unbiased Fisher-Yates placement order
++ symbolic BFS witness
++ authoritative resolver replay
+= accepted playable run
+```
+
+Run a reproducible game with:
+
+```text
+kaya play --seed 12345
+```
+
+The prototype exhaustively proves all nine flashlight/key placement combinations and sweeps seeds `1..1000`. Seed `12345` was also completed end to end through `qwen3.5:4b`, the intent parser, and the real resolver.
+
+Verification note: unit tests, race tests, vet, Ollama integration, and the CLI playthrough pass. On this Windows machine, race tests use MSYS2 UCRT64 GCC:
+
+```powershell
+$env:PATH="C:\msys64\ucrt64\bin;$env:PATH"
+$env:CGO_ENABLED="1"
+$env:CC="gcc"
+go test -race ./...
+```
+
 Phase 5 adds roguelike variation without allowing broken runs. The key rule is:
 
 ```text

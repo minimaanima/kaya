@@ -25,6 +25,9 @@ type State struct {
 	Items                map[game.ItemID]Item
 	Inventory            map[game.ItemID]bool
 	DiscoveredItems      map[game.ItemID]bool
+	KnownExitDirections  map[game.RoomID]map[string]bool
+	RecentReferents      []game.ReferentGroup
+	ObservedObjectFacts  map[game.ObjectID]map[game.FactKind]game.Fact
 	LastMentionedItemID  game.ItemID
 	LastMentionedItemIDs []game.ItemID
 	ActiveLight          bool
@@ -35,14 +38,16 @@ type State struct {
 
 func NewState(currentRoomID game.RoomID) *State {
 	return &State{
-		CurrentRoomID:   currentRoomID,
-		Rooms:           make(map[game.RoomID]Room),
-		Doors:           make(map[game.DoorID]Door),
-		Objects:         make(map[game.ObjectID]Object),
-		Items:           make(map[game.ItemID]Item),
-		Inventory:       make(map[game.ItemID]bool),
-		DiscoveredItems: make(map[game.ItemID]bool),
-		Kaya:            kaya.DefaultState(),
+		CurrentRoomID:       currentRoomID,
+		Rooms:               make(map[game.RoomID]Room),
+		Doors:               make(map[game.DoorID]Door),
+		Objects:             make(map[game.ObjectID]Object),
+		Items:               make(map[game.ItemID]Item),
+		Inventory:           make(map[game.ItemID]bool),
+		DiscoveredItems:     make(map[game.ItemID]bool),
+		KnownExitDirections: make(map[game.RoomID]map[string]bool),
+		ObservedObjectFacts: make(map[game.ObjectID]map[game.FactKind]game.Fact),
+		Kaya:                kaya.DefaultState(),
 	}
 }
 
@@ -57,20 +62,6 @@ func (s *State) CurrentRoom() (Room, error) {
 	}
 
 	return room, nil
-}
-
-func (s *State) AvailableExits() ([]Exit, error) {
-	room, err := s.CurrentRoom()
-	if err != nil {
-		return nil, err
-	}
-
-	exits := make([]Exit, 0, len(room.Exits))
-	for _, exit := range room.Exits {
-		exits = append(exits, exit)
-	}
-
-	return exits, nil
 }
 
 func (s *State) VisibleObjects() ([]Object, error) {
@@ -94,16 +85,7 @@ func (s *State) VisibleObjects() ([]Object, error) {
 }
 
 func (s *State) CanSeeObject(room Room, object Object) bool {
-	if s != nil && s.ActiveLight {
-		return true
-	}
-	if room.Visibility == VisibilityPitchBlack {
-		return false
-	}
-	if room.NeedsLight() {
-		return !object.RequiresLight
-	}
-	return true
+	return CanSeeObject(room, object, s != nil && s.ActiveLight)
 }
 
 func (s *State) HasItem(itemID game.ItemID) bool {
@@ -206,13 +188,13 @@ func (s *State) ResolveDoor(target string) (DoorResolution, error) {
 		return DoorResolution{}, nil
 	}
 
-	room, err := s.CurrentRoom()
+	exits, err := s.AvailableExits()
 	if err != nil {
 		return DoorResolution{}, err
 	}
 
 	var matches []Door
-	for _, exit := range room.Exits {
+	for _, exit := range exits {
 		if exit.Door == "" {
 			continue
 		}
@@ -232,14 +214,15 @@ func (s *State) ResolveDoor(target string) (DoorResolution, error) {
 type ObjectResolution struct {
 	Target  string
 	Matches []Object
+	All     bool
 }
 
 func (r ObjectResolution) Found() bool {
-	return len(r.Matches) == 1
+	return len(r.Matches) == 1 || (r.All && len(r.Matches) > 0)
 }
 
 func (r ObjectResolution) Ambiguous() bool {
-	return len(r.Matches) > 1
+	return len(r.Matches) > 1 && !r.All
 }
 
 func (r ObjectResolution) Missing() bool {

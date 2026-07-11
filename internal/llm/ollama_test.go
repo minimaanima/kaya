@@ -24,6 +24,9 @@ func TestOllamaClientGenerate(t *testing.T) {
 		if request.Format != "json" {
 			t.Fatalf("format = %q, want json", request.Format)
 		}
+		if request.Think == nil || *request.Think {
+			t.Fatalf("think = %v, want explicit false", request.Think)
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"response":"{\"action\":\"wait\"}"}`))
@@ -41,6 +44,45 @@ func TestOllamaClientGenerate(t *testing.T) {
 	}
 	if got != `{"action":"wait"}` {
 		t.Fatalf("response = %q, want json response", got)
+	}
+}
+
+func TestOllamaClientGenerateJSONForwardsSchema(t *testing.T) {
+	schema := map[string]any{"type": "object", "required": []string{"actions"}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request ollamaGenerateRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		format, ok := request.Format.(map[string]any)
+		if !ok || format["type"] != "object" {
+			t.Fatalf("format = %#v", request.Format)
+		}
+		if request.Think == nil || *request.Think {
+			t.Fatalf("think = %#v", request.Think)
+		}
+		_, _ = w.Write([]byte(`{"response":"{\"actions\":[]}"}`))
+	}))
+	defer server.Close()
+
+	client, err := NewOllamaClient("qwen3.5:4b", WithOllamaBaseURL(server.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.GenerateJSON(context.Background(), "system", "user", schema); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOllamaClientGenerateJSONRequiresSchema(t *testing.T) {
+	client, err := NewOllamaClient("qwen3.5:4b")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = client.GenerateJSON(context.Background(), "system", "user", nil)
+	if err == nil || err.Error() != "json schema is required" {
+		t.Fatalf("GenerateJSON error = %v, want json schema is required", err)
 	}
 }
 

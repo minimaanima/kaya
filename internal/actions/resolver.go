@@ -46,6 +46,8 @@ func (r Resolver) Resolve(in intent.Intent) game.ActionResult {
 		result = r.turnOn(in)
 	case intent.ActionTurnOff:
 		result = r.turnOff(in)
+	case intent.ActionExplore:
+		result = r.explore()
 	case intent.ActionListen:
 		result = makeResult("listened", 5, "I listen carefully. The damaged building creaks around me.")
 	case intent.ActionWait:
@@ -68,7 +70,7 @@ func (r Resolver) inspect(in intent.Intent) game.ActionResult {
 			return r.inspect(in)
 		}
 
-		resolution, err := r.state.ResolveObject(in.Target)
+		resolution, err := r.state.ResolveObjectGroup(in.Target, false)
 		if err != nil {
 			return failed("inspect_failed", err.Error())
 		}
@@ -83,7 +85,8 @@ func (r Resolver) inspect(in intent.Intent) game.ActionResult {
 		}
 
 		object := resolution.Matches[0]
-		return makeResult("inspected_object", 5, object.Description)
+		result := makeResult("inspected_object", 5, object.Description)
+		return r.withObjectObservation(result, object, world.ObservationInspect)
 	}
 
 	room, err := r.state.CurrentRoom()
@@ -99,17 +102,19 @@ func (r Resolver) inspect(in intent.Intent) game.ActionResult {
 		return failed("inspect_failed", err.Error())
 	}
 
-	facts := []game.Fact{{Text: room.Description}}
+	facts := []game.Fact{typedFact(game.FactID(string(room.ID)+":description"), game.FactRoomDescription, string(room.ID), room.Description, room.Description)}
 	if len(objects) == 0 {
-		facts = append(facts, game.Fact{Text: "I cannot make out any distinct objects."})
+		facts = append(facts, typedFact(game.FactID(string(room.ID)+":visible_objects"), game.FactVisibleObjects, string(room.ID), "none", "I cannot make out any distinct objects."))
 	} else {
-		facts = append(facts, game.Fact{Text: "I can see: " + joinObjectNames(objects) + "."})
+		facts = append(facts, typedFact(game.FactID(string(room.ID)+":visible_objects"), game.FactVisibleObjects, string(room.ID), joinObjectNames(objects), "I can see: "+joinObjectNames(objects)+"."))
 	}
 	if len(exits) > 0 {
-		facts = append(facts, game.Fact{Text: "I can go: " + joinExitDirections(exits) + "."})
+		facts = append(facts, typedFact(game.FactID(string(room.ID)+":known_exits"), game.FactKnownExits, string(room.ID), joinExitDirections(exits), "I can go: "+joinExitDirections(exits)+"."))
 	}
+	r.state.RememberObjects(objectIDs(objects))
 
 	return game.ActionResult{
+		Status:          game.ActionSucceeded,
 		DurationSeconds: 5,
 		Outcome:         "inspected_room",
 		VisibleFacts:    facts,
@@ -131,19 +136,29 @@ func (r Resolver) move(in intent.Intent) game.ActionResult {
 		return failed("move_failed", err.Error())
 	}
 
+	knownExits, err := r.state.AvailableExits()
+	if err != nil {
+		return failed("move_failed", err.Error())
+	}
+
 	if isBackDirection(direction) && r.state.PreviousRoomID != "" {
-		for _, exit := range room.Exits {
+		for _, exit := range knownExits {
 			if exit.To == r.state.PreviousRoomID {
 				return r.moveThroughExit(direction, exit)
 			}
 		}
 	}
 
-	for _, exit := range room.Exits {
+	for _, exit := range knownExits {
 		if !world.MatchesTarget(direction, exit.Direction, nil) {
 			continue
 		}
 		return r.moveThroughExit(direction, exit)
+	}
+	for _, exit := range room.Exits {
+		if world.MatchesTarget(direction, exit.Direction, nil) {
+			return failed("exit_unknown", "I cannot safely find that route in the dark.")
+		}
 	}
 
 	return failed("exit_not_found", "I cannot find that way out.")
@@ -163,6 +178,9 @@ func (r Resolver) moveThroughExit(direction string, exit world.Exit) game.Action
 	from := r.state.CurrentRoomID
 	r.state.CurrentRoomID = exit.To
 	r.state.PreviousRoomID = from
+	if err := r.state.ObserveRoom(exit.To, from); err != nil {
+		return failed("move_failed", err.Error())
+	}
 	destination, err := r.state.CurrentRoom()
 	if err != nil {
 		return failed("move_failed", err.Error())
@@ -177,7 +195,7 @@ func (r Resolver) search(in intent.Intent) game.ActionResult {
 		return clarification("What should I search?")
 	}
 
-	resolution, err := r.state.ResolveObject(in.Target)
+	resolution, err := r.state.ResolveObjectGroup(in.Target, false)
 	if err != nil {
 		return failed("search_failed", err.Error())
 	}
@@ -193,10 +211,10 @@ func (r Resolver) search(in intent.Intent) game.ActionResult {
 
 	object := resolution.Matches[0]
 	if !object.Searchable {
-		return failed("not_searchable", "I do not see a useful way to search that.")
+		return r.withObjectObservation(failed("not_searchable", "I do not see a useful way to search that."), object, world.ObservationSearch)
 	}
 	if len(object.ContainedItems) == 0 {
-		return makeResult("searched_empty", 30, "I search the "+object.Name+" but find nothing useful.")
+		return r.withObjectObservation(makeResult("searched_empty", 30, "I search the "+object.Name+" but find nothing useful."), object, world.ObservationSearch)
 	}
 
 	facts := []string{"I search the " + object.Name + "."}
@@ -210,8 +228,9 @@ func (r Resolver) search(in intent.Intent) game.ActionResult {
 		facts = append(facts, "I find "+item.Name+".")
 	}
 	r.state.DiscoverItems(foundItemIDs)
+	r.state.RememberItems(foundItemIDs)
 
-	return makeResult("searched_found_items", 35, facts...)
+	return r.withObjectObservation(makeResult("searched_found_items", 35, facts...), object, world.ObservationSearch)
 }
 
 func (r Resolver) takeItem(in intent.Intent) game.ActionResult {
@@ -269,6 +288,7 @@ func (r Resolver) takeItem(in intent.Intent) game.ActionResult {
 			}
 
 			r.state.AddInventory(itemID)
+			r.state.RememberItems([]game.ItemID{itemID})
 			return makeResult("item_taken", 5, "I pick up "+item.Name+".")
 		}
 	}
@@ -294,6 +314,9 @@ func (r Resolver) useItem(in intent.Intent) game.ActionResult {
 			return failed("missing_item", "I do not have the flashlight.")
 		}
 		r.state.ActiveLight = true
+		if err := r.state.ObserveRoom(r.state.CurrentRoomID, ""); err != nil {
+			return failed("use_failed", err.Error())
+		}
 		return makeResult("flashlight_on", 3, "I turn on the flashlight.")
 	}
 	if !world.MatchesTarget(in.Item, "key", []string{"brass key", "small key"}) {
@@ -352,9 +375,23 @@ func (r Resolver) turnOn(in intent.Intent) game.ActionResult {
 			return failed("missing_item", "I do not have the flashlight.")
 		}
 		r.state.ActiveLight = true
+		if err := r.state.ObserveRoom(r.state.CurrentRoomID, ""); err != nil {
+			return failed("turn_on_failed", err.Error())
+		}
 		return makeResult("flashlight_on", 3, "I turn on the flashlight.")
 	}
 	return failed("cannot_turn_on", "I cannot turn that on.")
+}
+
+func (r Resolver) explore() game.ActionResult {
+	exit, found, err := r.state.DiscoverNextUnknownExit()
+	if err != nil {
+		return failed("explore_failed", err.Error())
+	}
+	if !found {
+		return makeResult("no_unknown_exits", 30, "I feel along the walls but cannot find another exit.")
+	}
+	return makeResult("exit_discovered", 30, "I feel along the wall and find a way "+exit.Direction+".")
 }
 
 func (r Resolver) turnOff(in intent.Intent) game.ActionResult {
@@ -436,15 +473,17 @@ func (r Resolver) autonomyResult(in intent.Intent) (game.ActionResult, bool) {
 	decision := r.state.Kaya.CanAttempt(danger)
 	if !decision.Allowed {
 		return game.ActionResult{
+			Status:       game.ActionRefused,
 			Outcome:      "kaya_refused",
-			VisibleFacts: []game.Fact{{Text: decision.Reason}},
+			VisibleFacts: []game.Fact{typedFact("kaya:refusal", game.FactEmotion, "kaya", "refused", decision.Reason)},
 			Danger:       game.DangerNone,
 		}, true
 	}
 	if decision.NeedsConfirmation {
 		return game.ActionResult{
+			Status:                game.ActionClarification,
 			Outcome:               "kaya_needs_confirmation",
-			VisibleFacts:          []game.Fact{{Text: decision.Reason}},
+			VisibleFacts:          []game.Fact{typedFact("kaya:confirmation", game.FactEmotion, "kaya", "needs_confirmation", decision.Reason)},
 			NeedsClarification:    true,
 			ClarificationQuestion: decision.Reason,
 			Danger:                game.DangerNone,
@@ -479,20 +518,20 @@ func (r Resolver) moveDanger(in intent.Intent) game.DangerLevel {
 		return game.DangerNone
 	}
 
-	room, err := r.state.CurrentRoom()
+	exits, err := r.state.AvailableExits()
 	if err != nil {
 		return game.DangerNone
 	}
 
 	if isBackDirection(direction) && r.state.PreviousRoomID != "" {
-		for _, exit := range room.Exits {
+		for _, exit := range exits {
 			if exit.To == r.state.PreviousRoomID {
 				return r.exitDanger(exit)
 			}
 		}
 	}
 
-	for _, exit := range room.Exits {
+	for _, exit := range exits {
 		if world.MatchesTarget(direction, exit.Direction, nil) {
 			return r.exitDanger(exit)
 		}
@@ -537,13 +576,13 @@ func isBodySearchTarget(target string) bool {
 }
 
 func (r Resolver) inferKeyDoor(keyID game.ItemID) (world.Door, bool) {
-	room, err := r.state.CurrentRoom()
+	exits, err := r.state.AvailableExits()
 	if err != nil {
 		return world.Door{}, false
 	}
 
 	var matches []world.Door
-	for _, exit := range room.Exits {
+	for _, exit := range exits {
 		if exit.Door == "" {
 			continue
 		}
@@ -737,10 +776,11 @@ func makeResult(outcome string, duration int, facts ...string) game.ActionResult
 		if strings.TrimSpace(fact) == "" {
 			continue
 		}
-		visibleFacts = append(visibleFacts, game.Fact{Text: fact})
+		visibleFacts = append(visibleFacts, typedFact(game.FactID(fmt.Sprintf("%s:%d", outcome, len(visibleFacts))), game.FactAction, "action", outcome, fact))
 	}
 
 	return game.ActionResult{
+		Status:          game.ActionSucceeded,
 		DurationSeconds: duration,
 		Outcome:         outcome,
 		VisibleFacts:    visibleFacts,
@@ -750,9 +790,10 @@ func makeResult(outcome string, duration int, facts ...string) game.ActionResult
 
 func failed(outcome string, fact string) game.ActionResult {
 	return game.ActionResult{
+		Status:          game.ActionFailed,
 		DurationSeconds: 2,
 		Outcome:         outcome,
-		VisibleFacts:    []game.Fact{{Text: fact}},
+		VisibleFacts:    []game.Fact{typedFact(game.FactID(outcome), game.FactFailure, "action", outcome, fact)},
 		Danger:          game.DangerNone,
 	}
 }
@@ -762,8 +803,9 @@ func clarification(question string) game.ActionResult {
 		question = "What should I do?"
 	}
 	return game.ActionResult{
+		Status:                game.ActionClarification,
 		Outcome:               "needs_clarification",
-		VisibleFacts:          []game.Fact{{Text: question}},
+		VisibleFacts:          []game.Fact{typedFact("needs_clarification", game.FactClarification, "action", "needs_clarification", question)},
 		NeedsClarification:    true,
 		ClarificationQuestion: question,
 		Danger:                game.DangerNone,
@@ -808,4 +850,23 @@ func joinExitDirections(exits []world.Exit) string {
 		directions = append(directions, exit.Direction)
 	}
 	return strings.Join(directions, ", ")
+}
+
+func (r Resolver) withObjectObservation(result game.ActionResult, object world.Object, method world.ObservationMethod) game.ActionResult {
+	result.TargetObjectIDs = []game.ObjectID{object.ID}
+	r.state.RememberObjects(result.TargetObjectIDs)
+	result.VisibleFacts = append(result.VisibleFacts, r.state.ObserveObject(object.ID, method)...)
+	return result
+}
+
+func typedFact(id game.FactID, kind game.FactKind, subject string, value string, text string) game.Fact {
+	return game.Fact{ID: id, Kind: kind, Subject: subject, Value: value, Text: text, Required: true}
+}
+
+func objectIDs(objects []world.Object) []game.ObjectID {
+	ids := make([]game.ObjectID, 0, len(objects))
+	for _, object := range objects {
+		ids = append(ids, object.ID)
+	}
+	return ids
 }

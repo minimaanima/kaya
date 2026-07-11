@@ -3,26 +3,35 @@ package main
 import (
 	"bufio"
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/binary"
 	"encoding/json"
+	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
-	"kaya/internal/actions"
 	"kaya/internal/game"
 	"kaya/internal/intent"
 	kayastate "kaya/internal/kaya"
 	"kaya/internal/llm"
+	"kaya/internal/response"
+	"kaya/internal/rungen"
+	"kaya/internal/runscenario"
 	"kaya/internal/scenario"
+	"kaya/internal/turn"
 	"kaya/internal/world"
 )
 
+const defaultOllamaModel = "qwen3.5:4b"
+
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("usage: kaya <intent|play> [player message]")
+		fmt.Println("usage: kaya <intent|play|playtest>")
 		return
 	}
 
@@ -33,7 +42,7 @@ func main() {
 			os.Exit(1)
 		}
 	case "play":
-		if err := runPlay(); err != nil {
+		if err := runPlay(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -54,7 +63,7 @@ func runIntent(args []string) error {
 		return fmt.Errorf("usage: kaya intent <player message>")
 	}
 
-	model := envOrDefault("KAYA_OLLAMA_MODEL", "mistral:latest")
+	model := envOrDefault("KAYA_OLLAMA_MODEL", defaultOllamaModel)
 	baseURL := envOrDefault("KAYA_OLLAMA_URL", llm.DefaultOllamaURL)
 
 	client, err := llm.NewOllamaClient(model, llm.WithOllamaBaseURL(baseURL))
@@ -63,7 +72,12 @@ func runIntent(args []string) error {
 	}
 
 	parser := intent.NewParser(client)
-	parsed, err := parser.Parse(context.Background(), message)
+	state := scenario.NewPrototypeWorld()
+	snapshot, err := state.PerceptionSnapshot()
+	if err != nil {
+		return fmt.Errorf("snapshot world: %w", err)
+	}
+	parsed, err := parser.Parse(context.Background(), message, snapshot)
 	if err != nil {
 		return err
 	}
@@ -77,8 +91,23 @@ func runIntent(args []string) error {
 	return nil
 }
 
-func runPlay() error {
-	model := envOrDefault("KAYA_OLLAMA_MODEL", "mistral:latest")
+func runPlay(args []string) error {
+	options, err := parsePlayOptions(args, newRunSeed)
+	if err != nil {
+		return err
+	}
+	run, err := rungen.Generate(
+		rungen.RunConfig{
+			Seed:             options.Seed,
+			GeneratorVersion: rungen.CurrentGeneratorVersion,
+		},
+		runscenario.PrototypeDefinition(),
+	)
+	if err != nil {
+		return fmt.Errorf("generate run: %w", err)
+	}
+
+	model := envOrDefault("KAYA_OLLAMA_MODEL", defaultOllamaModel)
 	baseURL := envOrDefault("KAYA_OLLAMA_URL", llm.DefaultOllamaURL)
 
 	client, err := llm.NewOllamaClient(model, llm.WithOllamaBaseURL(baseURL))
@@ -87,10 +116,12 @@ func runPlay() error {
 	}
 
 	parser := intent.NewParser(client)
-	state := scenario.NewPrototypeWorld()
-	resolver := actions.NewResolver(state)
+	state := run.State
+	executor := turn.NewExecutor(state)
+	composer := response.NewComposer(client)
 	scanner := bufio.NewScanner(os.Stdin)
 
+	printRunDebug(os.Stdout, run)
 	fmt.Println("Connection established.")
 	fmt.Println("Kaya: I can read you. I am in reception. The ceiling is cracked, but I can move.")
 	fmt.Println("Type naturally. Use 'quit' or 'exit' to stop.")
@@ -110,17 +141,19 @@ func runPlay() error {
 			return nil
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		parsed, err := parser.Parse(ctx, message)
-		cancel()
+		processed, err := processPlayerTurn(context.Background(), message, state, parser, executor, composer)
 		if err != nil {
 			fmt.Println("Kaya: The signal broke up. I did not understand that.")
 			fmt.Println("debug:", err)
 			continue
 		}
-
-		result := resolver.Resolve(parsed)
-		printResult(result)
+		if elapsed := resultDuration(processed.Result); elapsed > 0 {
+			fmt.Printf("[time +%ds]\n", elapsed)
+		}
+		fmt.Println("Kaya:", processed.Response.Text)
+		if processed.Response.UsedFallback {
+			fmt.Println("debug:", processed.Response.FallbackReason)
+		}
 		if state.CurrentRoomID == scenario.RoomStairwell {
 			fmt.Println("Kaya: I am in the stairwell. This part is clear.")
 			fmt.Println("Prototype objective complete.")
@@ -134,8 +167,49 @@ func runPlay() error {
 	return nil
 }
 
+type turnParser interface {
+	Parse(context.Context, string, game.PerceptionSnapshot) (intent.TurnPlan, error)
+}
+
+type responseComposer interface {
+	Compose(context.Context, turn.FactBundle) response.Response
+}
+
+type processedTurn struct {
+	Plan     intent.TurnPlan
+	Result   turn.Result
+	Response response.Response
+}
+
+func processPlayerTurn(ctx context.Context, message string, state *world.State, parser turnParser, executor turn.Executor, composer responseComposer) (processedTurn, error) {
+	snapshot, err := state.PerceptionSnapshot()
+	if err != nil {
+		return processedTurn{}, err
+	}
+	parseCtx, cancelParse := context.WithTimeout(ctx, 60*time.Second)
+	plan, err := parser.Parse(parseCtx, message, snapshot)
+	cancelParse()
+	if err != nil {
+		return processedTurn{}, err
+	}
+	result := executor.Execute(plan)
+	bundle := result.FactBundle(message)
+	responseCtx, cancelResponse := context.WithTimeout(ctx, 60*time.Second)
+	composed := composer.Compose(responseCtx, bundle)
+	cancelResponse()
+	return processedTurn{Plan: plan, Result: result, Response: composed}, nil
+}
+
+func resultDuration(result turn.Result) int {
+	total := 0
+	for _, outcome := range result.Outcomes {
+		total += outcome.Result.DurationSeconds
+	}
+	return total
+}
+
 func runPlaytest() error {
-	model := envOrDefault("KAYA_OLLAMA_MODEL", "mistral:latest")
+	model := envOrDefault("KAYA_OLLAMA_MODEL", defaultOllamaModel)
 	baseURL := envOrDefault("KAYA_OLLAMA_URL", llm.DefaultOllamaURL)
 
 	client, err := llm.NewOllamaClient(model, llm.WithOllamaBaseURL(baseURL))
@@ -144,6 +218,7 @@ func runPlaytest() error {
 	}
 
 	parser := intent.NewParser(client)
+	composer := response.NewComposer(client)
 	run := playtestRun{
 		Model:     model,
 		BaseURL:   baseURL,
@@ -151,7 +226,7 @@ func runPlaytest() error {
 	}
 
 	for _, script := range defaultPlaytestScripts() {
-		runScript, err := runPlaytestScript(parser, script)
+		runScript, err := runPlaytestScript(parser, script, composer)
 		if err != nil {
 			return err
 		}
@@ -173,7 +248,84 @@ func runPlaytest() error {
 	return nil
 }
 
-func runPlaytestScript(parser intent.Parser, script playtestScript) (playtestScriptLog, error) {
+type playOptions struct {
+	Seed int64
+}
+
+func parsePlayOptions(args []string, generateSeed func() (int64, error)) (playOptions, error) {
+	flags := flag.NewFlagSet("play", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	seed := flags.Int64("seed", 0, "reproducible run seed")
+	if err := flags.Parse(args); err != nil {
+		return playOptions{}, err
+	}
+	if flags.NArg() != 0 {
+		return playOptions{}, fmt.Errorf("usage: kaya play [--seed <int64>]")
+	}
+
+	provided := false
+	flags.Visit(func(current *flag.Flag) {
+		if current.Name == "seed" {
+			provided = true
+		}
+	})
+	if provided {
+		return playOptions{Seed: *seed}, nil
+	}
+
+	generated, err := generateSeed()
+	if err != nil {
+		return playOptions{}, err
+	}
+	return playOptions{Seed: generated}, nil
+}
+
+func newRunSeed() (int64, error) {
+	return readRunSeed(cryptorand.Reader)
+}
+
+func readRunSeed(reader io.Reader) (int64, error) {
+	const positiveMask = ^uint64(0) >> 1
+	for {
+		var value [8]byte
+		if _, err := io.ReadFull(reader, value[:]); err != nil {
+			return 0, fmt.Errorf("generate run seed: %w", err)
+		}
+		seed := int64(binary.LittleEndian.Uint64(value[:]) & positiveMask)
+		if seed != 0 {
+			return seed, nil
+		}
+	}
+}
+
+func printRunDebug(writer io.Writer, run rungen.GeneratedRun) {
+	fmt.Fprintf(writer, "Run seed: %d\n", run.Seed)
+	fmt.Fprintf(writer, "Generator: %d\n", run.GeneratorVersion)
+
+	placements := append([]rungen.Placement(nil), run.Placements...)
+	sort.Slice(placements, func(i, j int) bool {
+		return placements[i].ItemID < placements[j].ItemID
+	})
+	for _, placement := range placements {
+		itemName := string(placement.ItemID)
+		if item, ok := run.State.Items[placement.ItemID]; ok {
+			itemName = item.Name
+		}
+		objectName := string(placement.ObjectID)
+		if object, ok := run.State.Objects[placement.ObjectID]; ok {
+			objectName = object.Name
+		}
+		fmt.Fprintf(writer, "%s: %s\n", itemName, objectName)
+	}
+	fmt.Fprintf(
+		writer,
+		"Validation: playable (%d witness steps, %d states)\n",
+		len(run.Validation.Witness),
+		run.Validation.VisitedStates,
+	)
+}
+
+func runPlaytestScript(parser turnParser, script playtestScript, composers ...responseComposer) (playtestScriptLog, error) {
 	state := scenario.NewPrototypeWorld()
 	if script.UseInitialKaya {
 		state.Kaya = script.InitialKaya
@@ -185,8 +337,15 @@ func runPlaytestScript(parser intent.Parser, script playtestScript) (playtestScr
 		state.AddInventory(itemID)
 	}
 	state.ActiveLight = script.InitialLight
+	if err := state.ObserveRoom(state.CurrentRoomID, state.PreviousRoomID); err != nil {
+		return playtestScriptLog{}, fmt.Errorf("observe initial room %q: %w", state.CurrentRoomID, err)
+	}
 
-	resolver := actions.NewResolver(state)
+	executor := turn.NewExecutor(state)
+	var composer responseComposer = response.NewComposer(nil)
+	if len(composers) > 0 && composers[0] != nil {
+		composer = composers[0]
+	}
 	log := playtestScriptLog{Name: script.Name}
 
 	for i, planned := range script.playtestMessages() {
@@ -205,9 +364,7 @@ func runPlaytestScript(parser intent.Parser, script playtestScript) (playtestScr
 			},
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		parsed, err := parser.Parse(ctx, message)
-		cancel()
+		processed, err := processPlayerTurn(context.Background(), message, state, parser, executor, composer)
 		if err != nil {
 			step.ParseError = err.Error()
 			step.Suspicious = true
@@ -217,9 +374,9 @@ func runPlaytestScript(parser intent.Parser, script playtestScript) (playtestScr
 			continue
 		}
 
-		result := resolver.Resolve(parsed)
-		step.Intent = parsed
-		step.Result = result
+		step.Plan = processed.Plan
+		step.Result = processed.Result
+		step.Response = processed.Response
 		step.After = playtestWorldState{
 			Room:       string(state.CurrentRoomID),
 			Time:       state.NowSeconds,
@@ -229,10 +386,10 @@ func runPlaytestScript(parser intent.Parser, script playtestScript) (playtestScr
 			Kaya:       state.Kaya,
 		}
 
-		if reason, ok := suspiciousOutcome(parsed, result); ok {
+		if reason, ok := suspiciousOutcome(processed.Plan, processed.Result, processed.Response); ok {
 			addSuspicion(&log, &step, reason)
 		}
-		for _, reason := range expectationMismatches(planned.Expect, parsed, result) {
+		for _, reason := range expectationMismatches(planned.Expect, processed.Plan, processed.Result) {
 			addSuspicion(&log, &step, reason)
 		}
 
@@ -292,6 +449,14 @@ type playtestMessage struct {
 }
 
 type playtestExpectation struct {
+	FirstAction     intent.Action
+	FirstOutcome    string
+	OutcomeCount    int
+	QuestionKind    game.FactKind
+	QuestionCount   int
+	RequireFactText string
+	ForbidFactText  string
+	// Action and Outcome are kept for compatibility with older local scripts.
 	Action  intent.Action
 	Outcome string
 }
@@ -313,8 +478,9 @@ type playtestStep struct {
 	Number     int
 	Player     string
 	Expected   playtestExpectation
-	Intent     intent.Intent
-	Result     game.ActionResult
+	Plan       intent.TurnPlan
+	Result     turn.Result
+	Response   response.Response
 	Before     playtestWorldState
 	After      playtestWorldState
 	ParseError string
@@ -333,6 +499,20 @@ type playtestWorldState struct {
 
 func defaultPlaytestScripts() []playtestScript {
 	return []playtestScript{
+		{
+			Name: "user regression fixed seed",
+			Steps: []playtestMessage{
+				{Player: "what is around you", Expect: playtestExpectation{FirstAction: intent.ActionInspect, FirstOutcome: "inspected_room", OutcomeCount: 1}},
+				{Player: "what is on the desk", Expect: playtestExpectation{FirstAction: intent.ActionInspect, FirstOutcome: "inspected_object", OutcomeCount: 1}},
+				{Player: "look inside the drawers", Expect: playtestExpectation{FirstAction: intent.ActionSearch, FirstOutcome: "searched_found_items", OutcomeCount: 1}},
+				{Player: "take the flashlight", Expect: playtestExpectation{FirstAction: intent.ActionTakeItem, FirstOutcome: "item_taken", OutcomeCount: 1}},
+				{Player: "go east", Expect: playtestExpectation{FirstAction: intent.ActionMove, FirstOutcome: "moved", OutcomeCount: 1}},
+				{Player: "whats around you", Expect: playtestExpectation{FirstAction: intent.ActionInspect, FirstOutcome: "inspected_room", OutcomeCount: 1, ForbidFactText: "north"}},
+				{Player: "turn on the flashlight", Expect: playtestExpectation{FirstAction: intent.ActionTurnOn, FirstOutcome: "flashlight_on", OutcomeCount: 1}},
+				{Player: "look around", Expect: playtestExpectation{FirstAction: intent.ActionInspect, FirstOutcome: "inspected_room", OutcomeCount: 1, RequireFactText: "north"}},
+				{Player: "search the doctors are they dead", Expect: playtestExpectation{FirstAction: intent.ActionSearch, FirstOutcome: "searched_found_items", OutcomeCount: 2, QuestionKind: game.FactLifeStatus, QuestionCount: 2}},
+			},
+		},
 		{
 			Name: "reception chaos",
 			Messages: []string{
@@ -543,24 +723,73 @@ func addSuspicion(log *playtestScriptLog, step *playtestStep, reason string) {
 	log.Suspicious = append(log.Suspicious, fmt.Sprintf("step %d %q -> %s", step.Number, step.Player, reason))
 }
 
-func suspiciousOutcome(parsed intent.Intent, result game.ActionResult) (string, bool) {
-	switch result.Outcome {
-	case "object_not_found", "object_not_visible", "item_not_found", "item_not_discovered", "item_not_portable", "item_already_taken", "unsupported_action", "unsupported_item", "exit_not_found", "cannot_turn_on", "cannot_turn_off", "missing_item", "needs_clarification":
-		return result.Outcome, true
+func suspiciousOutcome(plan intent.TurnPlan, result turn.Result, composed response.Response) (string, bool) {
+	if plan.NeedsClarification || result.StopReason == "clarification" {
+		return "parser_clarification", true
 	}
-	if parsed.Confidence < 0.5 {
-		return fmt.Sprintf("low_confidence %.2f", parsed.Confidence), true
+	for _, outcome := range result.Outcomes {
+		if outcome.Result.Status == game.ActionFailed || outcome.Result.Status == game.ActionRefused {
+			return outcome.Result.Outcome, true
+		}
+	}
+	if composed.UsedFallback {
+		return "response_fallback: " + composed.FallbackReason, true
+	}
+	if len(plan.Actions) > 0 && plan.Actions[0].Intent.Confidence < 0.5 {
+		return fmt.Sprintf("low_confidence %.2f", plan.Actions[0].Intent.Confidence), true
 	}
 	return "", false
 }
 
-func expectationMismatches(expect playtestExpectation, parsed intent.Intent, result game.ActionResult) []string {
+func expectationMismatches(expect playtestExpectation, plan intent.TurnPlan, result turn.Result) []string {
 	var mismatches []string
-	if expect.Action != "" && parsed.Action != expect.Action {
-		mismatches = append(mismatches, fmt.Sprintf("expected action %s, got %s", expect.Action, parsed.Action))
+	action := expect.FirstAction
+	if action == "" {
+		action = expect.Action
 	}
-	if expect.Outcome != "" && result.Outcome != expect.Outcome {
-		mismatches = append(mismatches, fmt.Sprintf("expected outcome %s, got %s", expect.Outcome, result.Outcome))
+	if action != "" {
+		if len(plan.Actions) == 0 {
+			mismatches = append(mismatches, fmt.Sprintf("expected action %s, got none", action))
+		} else if got := plan.Actions[0].Intent.Action; got != action {
+			mismatches = append(mismatches, fmt.Sprintf("expected action %s, got %s", action, got))
+		}
+	}
+	outcome := expect.FirstOutcome
+	if outcome == "" {
+		outcome = expect.Outcome
+	}
+	if outcome != "" {
+		if len(result.Outcomes) == 0 {
+			mismatches = append(mismatches, fmt.Sprintf("expected outcome %s, got none", outcome))
+		} else if got := result.Outcomes[0].Result.Outcome; got != outcome {
+			mismatches = append(mismatches, fmt.Sprintf("expected outcome %s, got %s", outcome, got))
+		}
+	}
+	if expect.OutcomeCount > 0 && len(result.Outcomes) != expect.OutcomeCount {
+		mismatches = append(mismatches, fmt.Sprintf("expected %d outcomes, got %d", expect.OutcomeCount, len(result.Outcomes)))
+	}
+	if expect.QuestionKind != "" {
+		count := 0
+		for _, fact := range result.QuestionFacts {
+			if fact.Kind == expect.QuestionKind {
+				count++
+			}
+		}
+		if count != expect.QuestionCount {
+			mismatches = append(mismatches, fmt.Sprintf("expected %d %s facts, got %d", expect.QuestionCount, expect.QuestionKind, count))
+		}
+	}
+	bundle := result.FactBundle("")
+	factText := make([]string, 0, len(bundle.Facts))
+	for _, fact := range bundle.Facts {
+		factText = append(factText, fact.Text)
+	}
+	joined := strings.ToLower(strings.Join(factText, " "))
+	if required := strings.TrimSpace(expect.RequireFactText); required != "" && !strings.Contains(joined, strings.ToLower(required)) {
+		mismatches = append(mismatches, fmt.Sprintf("required fact text %q missing", required))
+	}
+	if forbidden := strings.TrimSpace(expect.ForbidFactText); forbidden != "" && strings.Contains(joined, strings.ToLower(forbidden)) {
+		mismatches = append(mismatches, fmt.Sprintf("forbidden fact text %q present", forbidden))
 	}
 	return mismatches
 }
@@ -596,7 +825,15 @@ func writePlaytestLog(run playtestRun) (string, error) {
 			b.WriteString(fmt.Sprintf("Player: `%s`\n\n", step.Player))
 			b.WriteString(fmt.Sprintf("Before: room=`%s`, time=`%d`, light=`%t`, inventory=`%s`, discovered=`%s`, kaya=`%s`\n\n", step.Before.Room, step.Before.Time, step.Before.LightOn, strings.Join(step.Before.Inventory, ", "), strings.Join(step.Before.Discovered, ", "), formatKayaState(step.Before.Kaya)))
 			if !step.Expected.empty() {
-				b.WriteString(fmt.Sprintf("Expected: action=`%s`, outcome=`%s`\n\n", step.Expected.Action, step.Expected.Outcome))
+				expectedAction := step.Expected.FirstAction
+				if expectedAction == "" {
+					expectedAction = step.Expected.Action
+				}
+				expectedOutcome := step.Expected.FirstOutcome
+				if expectedOutcome == "" {
+					expectedOutcome = step.Expected.Outcome
+				}
+				b.WriteString(fmt.Sprintf("Expected: firstAction=`%s`, firstOutcome=`%s`, outcomeCount=`%d`, questionKind=`%s`, questionCount=`%d`, requireFact=`%s`, forbidFact=`%s`\n\n", expectedAction, expectedOutcome, step.Expected.OutcomeCount, step.Expected.QuestionKind, step.Expected.QuestionCount, step.Expected.RequireFactText, step.Expected.ForbidFactText))
 			}
 			if step.ParseError != "" {
 				b.WriteString("Parse error: `")
@@ -604,16 +841,18 @@ func writePlaytestLog(run playtestRun) (string, error) {
 				b.WriteString("`\n\n")
 				continue
 			}
-			b.WriteString(fmt.Sprintf("Intent: action=`%s`, target=`%s`, item=`%s`, direction=`%s`, confidence=`%.2f`\n\n", step.Intent.Action, step.Intent.Target, step.Intent.Item, step.Intent.Direction, step.Intent.Confidence))
-			b.WriteString(fmt.Sprintf("Outcome: `%s`, duration=`%d`, clarification=`%t`\n\n", step.Result.Outcome, step.Result.DurationSeconds, step.Result.NeedsClarification))
-			for _, fact := range step.Result.VisibleFacts {
+			b.WriteString(fmt.Sprintf("Turn plan: actions=`%d`, questions=`%d`, confidence=`%.2f`, clarification=`%t`\n\n", len(step.Plan.Actions), len(step.Plan.Questions), step.Plan.Confidence, step.Plan.NeedsClarification))
+			for i, action := range step.Plan.Actions {
+				b.WriteString(fmt.Sprintf("- Action %d: `%s` target=`%s`, item=`%s`, direction=`%s`, targetMode=`%s`\n", i+1, action.Intent.Action, action.Intent.Target, action.Intent.Item, action.Intent.Direction, action.TargetMode))
+			}
+			b.WriteString(fmt.Sprintf("Result: outcomes=`%d`, stop=`%s`, clarification=`%s`\n\n", len(step.Result.Outcomes), step.Result.StopReason, step.Result.ClarificationQuestion))
+			for i, outcome := range step.Result.Outcomes {
+				b.WriteString(fmt.Sprintf("- Outcome %d: `%s`, status=`%s`, duration=`%d`\n", i+1, outcome.Result.Outcome, outcome.Result.Status, outcome.Result.DurationSeconds))
+			}
+			b.WriteString(fmt.Sprintf("Response: `%s`, fallback=`%t`, reason=`%s`\n\n", step.Response.Text, step.Response.UsedFallback, step.Response.FallbackReason))
+			for _, fact := range step.Result.FactBundle(step.Player).Facts {
 				b.WriteString("- Kaya: ")
 				b.WriteString(fact.Text)
-				b.WriteString("\n")
-			}
-			for _, event := range step.Result.Events {
-				b.WriteString("- Event: ")
-				b.WriteString(event.Description)
 				b.WriteString("\n")
 			}
 			if step.Suspicious {
@@ -632,7 +871,7 @@ func writePlaytestLog(run playtestRun) (string, error) {
 }
 
 func (e playtestExpectation) empty() bool {
-	return e.Action == "" && e.Outcome == ""
+	return e.FirstAction == "" && e.FirstOutcome == "" && e.Action == "" && e.Outcome == "" && e.OutcomeCount == 0 && e.QuestionKind == "" && e.QuestionCount == 0 && e.RequireFactText == "" && e.ForbidFactText == ""
 }
 
 func inventoryNames(state *world.State) []string {

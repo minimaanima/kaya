@@ -12,15 +12,21 @@ const (
 
 	DoorStairwell game.DoorID = "door_stairwell"
 
-	ObjectReceptionDesk game.ObjectID = "reception_desk"
-	ObjectBodyCabinet   game.ObjectID = "body_cabinet"
-	ObjectBodyDoor      game.ObjectID = "body_door"
+	ObjectReceptionDesk  game.ObjectID = "reception_desk"
+	ObjectReceptionFloor game.ObjectID = "reception_floor"
+	ObjectCollapsedChair game.ObjectID = "collapsed_chair"
+	ObjectBodyCabinet    game.ObjectID = "body_cabinet"
+	ObjectBodyDoor       game.ObjectID = "body_door"
+	ObjectStorageCabinet game.ObjectID = "storage_cabinet"
 
 	ItemBrassKey   game.ItemID = "brass_key"
 	ItemFlashlight game.ItemID = "flashlight"
+
+	PrototypeScenarioID      = "prototype_escape"
+	PrototypeScenarioVersion = 1
 )
 
-func NewPrototypeWorld() *world.State {
+func NewPrototypeTemplate() *world.State {
 	state := world.NewState(RoomReception)
 
 	state.Rooms[RoomReception] = world.Room{
@@ -32,7 +38,7 @@ func NewPrototypeWorld() *world.State {
 			Direction: "east",
 			To:        RoomStorage,
 		}},
-		Objects: []game.ObjectID{ObjectReceptionDesk},
+		Objects: []game.ObjectID{ObjectReceptionDesk, ObjectReceptionFloor, ObjectCollapsedChair},
 	}
 	state.Rooms[RoomStorage] = world.Room{
 		ID:          RoomStorage,
@@ -47,7 +53,7 @@ func NewPrototypeWorld() *world.State {
 			To:        RoomStairwell,
 			Door:      DoorStairwell,
 		}},
-		Objects: []game.ObjectID{ObjectBodyCabinet, ObjectBodyDoor},
+		Objects: []game.ObjectID{ObjectBodyCabinet, ObjectBodyDoor, ObjectStorageCabinet},
 	}
 	state.Rooms[RoomStairwell] = world.Room{
 		ID:          RoomStairwell,
@@ -67,23 +73,41 @@ func NewPrototypeWorld() *world.State {
 	}
 
 	state.Objects[ObjectReceptionDesk] = world.Object{
-		ID:             ObjectReceptionDesk,
-		Name:           "Reception Desk",
-		Aliases:        []string{"desk", "table", "front desk", "drawer", "drawers"},
-		Description:    "A cracked laminate desk with drawers hanging open.",
-		Kind:           world.ObjectSurface,
-		Searchable:     true,
-		ContainedItems: []game.ItemID{ItemFlashlight},
+		ID:          ObjectReceptionDesk,
+		Name:        "Reception Desk",
+		Aliases:     []string{"desk", "table", "front desk", "drawer", "drawers"},
+		Description: "A cracked laminate desk with drawers hanging open.",
+		Kind:        world.ObjectSurface,
+		Searchable:  true,
+	}
+	state.Objects[ObjectReceptionFloor] = world.Object{
+		ID:          ObjectReceptionFloor,
+		Name:        "Reception Floor",
+		Aliases:     []string{"floor", "reception floor", "broken tiles"},
+		Description: "Broken tiles and fallen ceiling panels cover the floor.",
+		Kind:        world.ObjectSurface,
+		Searchable:  true,
+	}
+	state.Objects[ObjectCollapsedChair] = world.Object{
+		ID:          ObjectCollapsedChair,
+		Name:        "Collapsed Chair",
+		Aliases:     []string{"chair", "collapsed chair", "office chair"},
+		Description: "A collapsed office chair lies beneath a torn coat.",
+		Kind:        world.ObjectSurface,
+		Searchable:  true,
 	}
 	state.Objects[ObjectBodyCabinet] = world.Object{
-		ID:             ObjectBodyCabinet,
-		Name:           "Doctor Near Cabinet",
-		Aliases:        []string{"doctor", "body", "corpse", "doctor near cabinet", "coat pockets"},
-		Description:    "A dead doctor slumped beside a metal cabinet.",
-		Kind:           world.ObjectBody,
-		RequiresLight:  true,
-		Searchable:     true,
-		ContainedItems: []game.ItemID{ItemBrassKey},
+		ID:            ObjectBodyCabinet,
+		Name:          "Doctor Near Cabinet",
+		Aliases:       []string{"doctor", "body", "corpse", "doctor near cabinet", "coat pockets"},
+		Description:   "A dead doctor slumped beside a metal cabinet.",
+		Kind:          world.ObjectBody,
+		RequiresLight: true,
+		Searchable:    true,
+		ObservableFacts: []world.ObservableFact{{
+			Kind: game.FactLifeStatus, Value: "dead", Text: "The doctor is dead.",
+			RevealOn: []world.ObservationMethod{world.ObservationInspect, world.ObservationSearch},
+		}},
 	}
 	state.Objects[ObjectBodyDoor] = world.Object{
 		ID:            ObjectBodyDoor,
@@ -92,6 +116,19 @@ func NewPrototypeWorld() *world.State {
 		Description:   "A dead doctor collapsed near the stairwell door.",
 		Kind:          world.ObjectBody,
 		RequiresLight: false,
+		Searchable:    true,
+		ObservableFacts: []world.ObservableFact{{
+			Kind: game.FactLifeStatus, Value: "dead", Text: "The doctor is dead.",
+			RevealOn: []world.ObservationMethod{world.ObservationInspect, world.ObservationSearch},
+		}},
+	}
+	state.Objects[ObjectStorageCabinet] = world.Object{
+		ID:            ObjectStorageCabinet,
+		Name:          "Storage Cabinet",
+		Aliases:       []string{"storage cabinet", "metal cabinet"},
+		Description:   "A dented storage cabinet stands against the dark wall.",
+		Kind:          world.ObjectContainer,
+		RequiresLight: true,
 		Searchable:    true,
 	}
 
@@ -115,6 +152,21 @@ func NewPrototypeWorld() *world.State {
 		Description: "Somewhere deeper in the building, metal scrapes against concrete.",
 		Danger:      game.DangerLow,
 	})
+
+	_ = state.ObserveRoom(RoomReception, "")
+	return state
+}
+
+func NewPrototypeWorld() *world.State {
+	state := NewPrototypeTemplate()
+
+	desk := state.Objects[ObjectReceptionDesk]
+	desk.ContainedItems = []game.ItemID{ItemFlashlight}
+	state.Objects[desk.ID] = desk
+
+	body := state.Objects[ObjectBodyCabinet]
+	body.ContainedItems = []game.ItemID{ItemBrassKey}
+	state.Objects[body.ID] = body
 
 	return state
 }

@@ -95,6 +95,7 @@ func TestHighTrustCanAskConfirmationForRiskyMoveIntoDarkRoom(t *testing.T) {
 func TestMoveBlockedByLockedDoor(t *testing.T) {
 	state := scenario.NewPrototypeWorld()
 	state.CurrentRoomID = scenario.RoomStorage
+	discoverStorageDoor(t, state)
 	resolver := NewResolver(state)
 
 	got := resolver.Resolve(intent.Intent{Action: intent.ActionMove, Direction: "north"})
@@ -187,6 +188,18 @@ func TestTakeItemAddsInventory(t *testing.T) {
 	}
 	if !state.HasItem(scenario.ItemFlashlight) {
 		t.Fatal("flashlight was not added to inventory")
+	}
+}
+
+func TestTakeItemRemembersItemReferent(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	resolver := NewResolver(state)
+	resolver.Resolve(intent.Intent{Action: intent.ActionSearch, Target: "desk"})
+	if got := resolver.Resolve(intent.Intent{Action: intent.ActionTakeItem, Target: "flashlight"}); got.Outcome != "item_taken" {
+		t.Fatalf("take outcome = %q", got.Outcome)
+	}
+	if len(state.RecentReferents) == 0 || len(state.RecentReferents[len(state.RecentReferents)-1].ItemIDs) != 1 || state.RecentReferents[len(state.RecentReferents)-1].ItemIDs[0] != scenario.ItemFlashlight {
+		t.Fatalf("recent referents = %#v, want flashlight item group", state.RecentReferents)
 	}
 }
 
@@ -302,8 +315,8 @@ func TestTurnOnFlashlightRevealsDarkRoomObjects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VisibleObjects after returned error: %v", err)
 	}
-	if len(after) != 2 {
-		t.Fatalf("visible after len = %d, want 2", len(after))
+	if len(after) != 3 {
+		t.Fatalf("visible after len = %d, want 3", len(after))
 	}
 }
 
@@ -399,6 +412,7 @@ func TestHighStressCanBlockRiskyBodySearch(t *testing.T) {
 func TestUseKeyUnlocksDoor(t *testing.T) {
 	state := scenario.NewPrototypeWorld()
 	state.CurrentRoomID = scenario.RoomStorage
+	discoverStorageDoor(t, state)
 	state.AddInventory(scenario.ItemBrassKey)
 	resolver := NewResolver(state)
 
@@ -419,6 +433,7 @@ func TestUseKeyUnlocksDoor(t *testing.T) {
 func TestUseKeyInfersOnlyMatchingNearbyDoor(t *testing.T) {
 	state := scenario.NewPrototypeWorld()
 	state.CurrentRoomID = scenario.RoomStorage
+	discoverStorageDoor(t, state)
 	state.AddInventory(scenario.ItemBrassKey)
 	resolver := NewResolver(state)
 
@@ -438,6 +453,7 @@ func TestUseKeyInfersOnlyMatchingNearbyDoor(t *testing.T) {
 func TestUseKeyWhenParserPutsKeyInTarget(t *testing.T) {
 	state := scenario.NewPrototypeWorld()
 	state.CurrentRoomID = scenario.RoomStorage
+	discoverStorageDoor(t, state)
 	state.AddInventory(scenario.ItemBrassKey)
 	resolver := NewResolver(state)
 
@@ -457,6 +473,7 @@ func TestUseKeyWhenParserPutsKeyInTarget(t *testing.T) {
 func TestMoveThroughUnlockedDoor(t *testing.T) {
 	state := scenario.NewPrototypeWorld()
 	state.CurrentRoomID = scenario.RoomStorage
+	discoverStorageDoor(t, state)
 	door := state.Doors[scenario.DoorStairwell]
 	door.State = world.DoorClosed
 	state.Doors[scenario.DoorStairwell] = door
@@ -707,6 +724,114 @@ func TestScheduledEventFiresDuringAction(t *testing.T) {
 	}
 }
 
+func TestDarkRoomKnowsOnlyRouteBack(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	resolver := NewResolver(state)
+	if got := resolver.Resolve(intent.Intent{Action: intent.ActionMove, Direction: "east"}); got.Outcome != "moved" {
+		t.Fatalf("move outcome = %q", got.Outcome)
+	}
+	exits, err := state.AvailableExits()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(exits) != 1 || exits[0].Direction != "west" {
+		t.Fatalf("dark exits = %#v, want west only", exits)
+	}
+	got := resolver.Resolve(intent.Intent{Action: intent.ActionMove, Direction: "north"})
+	if got.Outcome != "exit_unknown" || state.CurrentRoomID != scenario.RoomStorage {
+		t.Fatalf("unknown move = %q room=%q", got.Outcome, state.CurrentRoomID)
+	}
+}
+
+func TestGuessedHiddenDangerousExitReturnsUnknownUnderPanic(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	resolver := NewResolver(state)
+	if got := resolver.Resolve(intent.Intent{Action: intent.ActionMove, Direction: "east"}); got.Outcome != "moved" {
+		t.Fatalf("move outcome = %q", got.Outcome)
+	}
+	door := state.Doors[scenario.DoorStairwell]
+	door.State = world.DoorClosed
+	state.Doors[door.ID] = door
+	destination := state.Rooms[scenario.RoomStairwell]
+	destination.Visibility = world.VisibilityPitchBlack
+	state.Rooms[destination.ID] = destination
+	state.Kaya = kaya.State{Stress: 90, Fear: 90}
+
+	got := resolver.Resolve(intent.Intent{Action: intent.ActionMove, Direction: "north"})
+	if got.Outcome != "exit_unknown" {
+		t.Fatalf("hidden dangerous exit outcome = %q, want exit_unknown", got.Outcome)
+	}
+	if state.CurrentRoomID != scenario.RoomStorage {
+		t.Fatalf("room = %q, want storage", state.CurrentRoomID)
+	}
+}
+
+func TestExploreDiscoversAuthoredExitAndCostsThirtySeconds(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	resolver := NewResolver(state)
+	resolver.Resolve(intent.Intent{Action: intent.ActionMove, Direction: "east"})
+	before := state.NowSeconds
+	got := resolver.Resolve(intent.Intent{Action: intent.ActionExplore, Target: "walls"})
+	if got.Outcome != "exit_discovered" || got.DurationSeconds != 30 {
+		t.Fatalf("explore = %#v", got)
+	}
+	if state.NowSeconds-before != 30 {
+		t.Fatalf("elapsed = %d, want 30", state.NowSeconds-before)
+	}
+	exits, _ := state.AvailableExits()
+	if len(exits) != 2 || exits[1].Direction != "north" {
+		t.Fatalf("known exits = %#v", exits)
+	}
+}
+
+func TestTurningOnLightRevealsAllCurrentRoomExits(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	state.AddInventory(scenario.ItemFlashlight)
+	resolver := NewResolver(state)
+	resolver.Resolve(intent.Intent{Action: intent.ActionMove, Direction: "east"})
+	resolver.Resolve(intent.Intent{Action: intent.ActionTurnOn, Item: "flashlight"})
+	exits, _ := state.AvailableExits()
+	if len(exits) != 2 {
+		t.Fatalf("lit exits = %#v, want west and north", exits)
+	}
+}
+
+func TestExploringKnownRoomStillCostsThirtySecondsAndFiresEvents(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	state.ScheduleEvent(10, game.WorldEvent{Type: game.EventSound, Description: "pipe knocks"})
+	got := NewResolver(state).Resolve(intent.Intent{Action: intent.ActionExplore})
+	if got.Outcome != "no_unknown_exits" || got.DurationSeconds != 30 || len(got.Events) != 1 {
+		t.Fatalf("explore = %#v", got)
+	}
+}
+
+func TestDiscoveredExitKnowledgeSurvivesLeavingAndReturning(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	state.ScheduledEvents = nil
+	resolver := NewResolver(state)
+	if got := resolver.Resolve(intent.Intent{Action: intent.ActionMove, Direction: "east"}); got.Outcome != "moved" {
+		t.Fatalf("initial move outcome = %q", got.Outcome)
+	}
+	if got := resolver.Resolve(intent.Intent{Action: intent.ActionExplore}); got.Outcome != "exit_discovered" {
+		t.Fatalf("explore outcome = %q", got.Outcome)
+	}
+	if got := resolver.Resolve(intent.Intent{Action: intent.ActionMove, Direction: "west"}); got.Outcome != "moved" {
+		t.Fatalf("leave outcome = %q", got.Outcome)
+	}
+	state.Kaya = kaya.DefaultState()
+	if got := resolver.Resolve(intent.Intent{Action: intent.ActionMove, Direction: "east"}); got.Outcome != "moved" {
+		t.Fatalf("return outcome = %q", got.Outcome)
+	}
+
+	exits, err := state.AvailableExits()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(exits) != 2 || exits[0].Direction != "west" || exits[1].Direction != "north" {
+		t.Fatalf("known exits after return = %#v, want west then north", exits)
+	}
+}
+
 func hasFactContaining(result game.ActionResult, text string) bool {
 	for _, fact := range result.VisibleFacts {
 		if strings.Contains(fact.Text, text) {
@@ -714,4 +839,18 @@ func hasFactContaining(result game.ActionResult, text string) bool {
 		}
 	}
 	return false
+}
+
+func discoverStorageDoor(t *testing.T, state *world.State) {
+	t.Helper()
+	if err := state.ObserveRoom(scenario.RoomStorage, scenario.RoomReception); err != nil {
+		t.Fatal(err)
+	}
+	exit, found, err := state.DiscoverNextUnknownExit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || exit.Direction != "north" {
+		t.Fatalf("discovered exit = %#v found=%t, want north", exit, found)
+	}
 }

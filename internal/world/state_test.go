@@ -7,6 +7,18 @@ import (
 	"kaya/internal/game"
 )
 
+func TestCanSeeObjectUsesExplicitLightState(t *testing.T) {
+	room := Room{Visibility: VisibilityPitchBlack}
+	object := Object{RequiresLight: false}
+
+	if CanSeeObject(room, object, false) {
+		t.Fatal("pitch-black object visible without light")
+	}
+	if !CanSeeObject(room, object, true) {
+		t.Fatal("object hidden with active light")
+	}
+}
+
 const (
 	roomReception game.RoomID   = "reception"
 	roomStorage   game.RoomID   = "storage"
@@ -163,6 +175,10 @@ func TestResolveObjectRespectsVisibility(t *testing.T) {
 func TestResolveDoorByNameAndDirection(t *testing.T) {
 	state := testState()
 	state.CurrentRoomID = roomStorage
+	state.ActiveLight = true
+	if err := state.ObserveRoom(roomStorage, ""); err != nil {
+		t.Fatal(err)
+	}
 
 	byName, err := state.ResolveDoor("stairwell door")
 	if err != nil {
@@ -268,6 +284,9 @@ func testState() *State {
 		Aliases:     []string{"torch", "light"},
 		Description: "A heavy flashlight with a weak beam.",
 		Portable:    true,
+	}
+	if err := state.ObserveRoom(roomReception, ""); err != nil {
+		panic(err)
 	}
 
 	return state
