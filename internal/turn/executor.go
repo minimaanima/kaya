@@ -101,6 +101,7 @@ func (e Executor) Execute(plan intent.TurnPlan) Result {
 				continue
 			}
 			if resolution.Ambiguous() {
+				e.state.RememberObjects(resolutionObjectIDs(resolution.Matches))
 				outcome := failedTargetOutcome(planned.Intent, "target_ambiguous", ambiguityText(resolution))
 				result.Outcomes = append(result.Outcomes, outcome)
 				result.StopReason = outcome.Result.Outcome
@@ -231,4 +232,12 @@ func ambiguityText(resolution world.ObjectResolution) string {
 		names = append(names, object.Name)
 	}
 	return "Which one do you mean: " + strings.Join(names, ", ") + "?"
+}
+
+func resolutionObjectIDs(objects []world.Object) []game.ObjectID {
+	ids := make([]game.ObjectID, 0, len(objects))
+	for _, object := range objects {
+		ids = append(ids, object.ID)
+	}
+	return ids
 }

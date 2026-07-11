@@ -147,11 +147,14 @@ func runPlay(args []string) error {
 			fmt.Println("debug:", err)
 			continue
 		}
+		if options.ParseLog || parseLogEnabled() {
+			fmt.Println(formatParseLog(processed.Plan))
+		}
 		if elapsed := resultDuration(processed.Result); elapsed > 0 {
 			fmt.Printf("[time +%ds]\n", elapsed)
 		}
 		fmt.Println("Kaya:", processed.Response.Text)
-		if processed.Response.UsedFallback {
+		if processed.Response.UsedFallback && debugOutputEnabled() {
 			fmt.Println("debug:", processed.Response.FallbackReason)
 		}
 		if state.CurrentRoomID == scenario.RoomStairwell {
@@ -249,18 +252,20 @@ func runPlaytest() error {
 }
 
 type playOptions struct {
-	Seed int64
+	Seed     int64
+	ParseLog bool
 }
 
 func parsePlayOptions(args []string, generateSeed func() (int64, error)) (playOptions, error) {
 	flags := flag.NewFlagSet("play", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	seed := flags.Int64("seed", 0, "reproducible run seed")
+	parseLog := flags.Bool("parse-log", false, "print parsed turn plans during play")
 	if err := flags.Parse(args); err != nil {
 		return playOptions{}, err
 	}
 	if flags.NArg() != 0 {
-		return playOptions{}, fmt.Errorf("usage: kaya play [--seed <int64>]")
+		return playOptions{}, fmt.Errorf("usage: kaya play [--seed <int64>] [--parse-log]")
 	}
 
 	provided := false
@@ -270,14 +275,14 @@ func parsePlayOptions(args []string, generateSeed func() (int64, error)) (playOp
 		}
 	})
 	if provided {
-		return playOptions{Seed: *seed}, nil
+		return playOptions{Seed: *seed, ParseLog: *parseLog}, nil
 	}
 
 	generated, err := generateSeed()
 	if err != nil {
 		return playOptions{}, err
 	}
-	return playOptions{Seed: generated}, nil
+	return playOptions{Seed: generated, ParseLog: *parseLog}, nil
 }
 
 func newRunSeed() (int64, error) {
@@ -910,4 +915,67 @@ func envOrDefault(name string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func debugOutputEnabled() bool {
+	return envBool("KAYA_DEBUG")
+}
+
+func parseLogEnabled() bool {
+	return envBool("KAYA_PARSE_LOG") || debugOutputEnabled()
+}
+
+func envBool(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func formatParseLog(plan intent.TurnPlan) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("parse: confidence=%.2f", plan.Confidence))
+	if plan.NeedsClarification {
+		b.WriteString(" clarification=true")
+		if strings.TrimSpace(plan.ClarificationQuestion) != "" {
+			b.WriteString(" question=")
+			b.WriteString(strconvQuote(plan.ClarificationQuestion))
+		}
+	}
+	if len(plan.Actions) == 0 {
+		b.WriteString(" actions=0")
+		return b.String()
+	}
+	b.WriteString(fmt.Sprintf(" actions=%d", len(plan.Actions)))
+	for i, planned := range plan.Actions {
+		in := planned.Intent
+		b.WriteString(fmt.Sprintf(" | %d:%s mode=%s", i+1, in.Action, planned.TargetMode))
+		if strings.TrimSpace(in.Target) != "" {
+			b.WriteString(" target=")
+			b.WriteString(in.Target)
+		}
+		if strings.TrimSpace(in.Item) != "" {
+			b.WriteString(" item=")
+			b.WriteString(in.Item)
+		}
+		if strings.TrimSpace(in.Direction) != "" {
+			b.WriteString(" direction=")
+			b.WriteString(in.Direction)
+		}
+		b.WriteString(fmt.Sprintf(" confidence=%.2f", in.Confidence))
+	}
+	if len(plan.Questions) > 0 {
+		b.WriteString(fmt.Sprintf(" questions=%d", len(plan.Questions)))
+	}
+	return b.String()
+}
+
+func strconvQuote(value string) string {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return value
+	}
+	return string(encoded)
 }

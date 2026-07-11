@@ -191,6 +191,24 @@ func TestTakeItemAddsInventory(t *testing.T) {
 	}
 }
 
+func TestTakeItemRemovesItemFromContainer(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	resolver := NewResolver(state)
+
+	resolver.Resolve(intent.Intent{Action: intent.ActionSearch, Target: "desk"})
+	if got := resolver.Resolve(intent.Intent{Action: intent.ActionTakeItem, Target: "flashlight"}); got.Outcome != "item_taken" {
+		t.Fatalf("take outcome = %q", got.Outcome)
+	}
+	got := resolver.Resolve(intent.Intent{Action: intent.ActionSearch, Target: "desk"})
+
+	if got.Outcome != "searched_empty" {
+		t.Fatalf("Outcome = %q, want searched_empty", got.Outcome)
+	}
+	if hasFactContaining(got, "Flashlight") {
+		t.Fatalf("facts = %+v, should not find a taken flashlight again", got.VisibleFacts)
+	}
+}
+
 func TestTakeItemRemembersItemReferent(t *testing.T) {
 	state := scenario.NewPrototypeWorld()
 	resolver := NewResolver(state)
@@ -647,6 +665,24 @@ func TestTalkItemLocationUnknownUntilDiscovered(t *testing.T) {
 	}
 }
 
+func TestTalkItemPresenceUnknownUntilDiscovered(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	resolver := NewResolver(state)
+
+	got := resolver.Resolve(intent.Intent{
+		Action:  intent.ActionTalk,
+		Item:    "flashlight",
+		RawText: "is there a flashlight",
+	})
+
+	if got.Outcome != "item_location_unknown" {
+		t.Fatalf("Outcome = %q, want item_location_unknown", got.Outcome)
+	}
+	if !hasFactContaining(got, "I have not found Flashlight yet.") {
+		t.Fatalf("facts = %+v, want not found answer", got.VisibleFacts)
+	}
+}
+
 func TestTalkItemLocationAfterDiscovery(t *testing.T) {
 	state := scenario.NewPrototypeWorld()
 	resolver := NewResolver(state)
@@ -682,6 +718,23 @@ func TestTalkItemLocationInInventory(t *testing.T) {
 	}
 	if !hasFactContaining(got, "I have Flashlight.") {
 		t.Fatalf("facts = %+v, want inventory location", got.VisibleFacts)
+	}
+}
+
+func TestTalkDoesNotTreatMindQuestionAsInventory(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	resolver := NewResolver(state)
+
+	got := resolver.Resolve(intent.Intent{
+		Action:  intent.ActionTalk,
+		RawText: "what do you have in mind",
+	})
+
+	if got.Outcome != "talked" {
+		t.Fatalf("Outcome = %q, want talked", got.Outcome)
+	}
+	if !hasFactContaining(got, "I hear you.") {
+		t.Fatalf("facts = %+v, want simple talk response", got.VisibleFacts)
 	}
 }
 

@@ -288,6 +288,8 @@ func (r Resolver) takeItem(in intent.Intent) game.ActionResult {
 			}
 
 			r.state.AddInventory(itemID)
+			object.ContainedItems = removeItemID(object.ContainedItems, itemID)
+			r.state.Objects[objectID] = object
 			r.state.RememberItems([]game.ItemID{itemID})
 			return makeResult("item_taken", 5, "I pick up "+item.Name+".")
 		}
@@ -438,6 +440,10 @@ func (r Resolver) talk(in intent.Intent) game.ActionResult {
 			return makeResult("inventory_empty", 1, "I do not have anything useful on me.")
 		}
 		return makeResult("inventory_listed", 1, "I have: "+strings.Join(names, ", ")+".")
+	}
+
+	if isItemPresenceQuestion(in) {
+		return r.answerItemLocation(in)
 	}
 
 	return makeResult("talked", 1, "I hear you.")
@@ -728,10 +734,26 @@ func isItemLocationQuestion(in intent.Intent) bool {
 		strings.Contains(raw, "where would")
 }
 
+func isItemPresenceQuestion(in intent.Intent) bool {
+	raw := strings.ToLower(strings.TrimSpace(in.RawText))
+	if strings.TrimSpace(in.Item) == "" && strings.TrimSpace(in.Target) == "" {
+		return false
+	}
+	return strings.Contains(raw, "is there") ||
+		strings.Contains(raw, "are there") ||
+		strings.Contains(raw, "do you see") ||
+		strings.Contains(raw, "can you see") ||
+		strings.Contains(raw, "have you found") ||
+		strings.Contains(raw, "did you find")
+}
+
 func isInventoryQuestion(in intent.Intent) bool {
 	raw := strings.ToLower(strings.TrimSpace(in.RawText))
 	target := strings.ToLower(strings.TrimSpace(in.Target))
 	item := strings.ToLower(strings.TrimSpace(in.Item))
+	if strings.Contains(raw, "in mind") {
+		return false
+	}
 	return target == "inventory" ||
 		item == "inventory" ||
 		target == "items" ||
@@ -869,4 +891,14 @@ func objectIDs(objects []world.Object) []game.ObjectID {
 		ids = append(ids, object.ID)
 	}
 	return ids
+}
+
+func removeItemID(itemIDs []game.ItemID, removed game.ItemID) []game.ItemID {
+	filtered := itemIDs[:0]
+	for _, itemID := range itemIDs {
+		if itemID != removed {
+			filtered = append(filtered, itemID)
+		}
+	}
+	return filtered
 }

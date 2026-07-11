@@ -65,7 +65,7 @@ func (p Parser) Parse(ctx context.Context, message string, snapshot game.Percept
 
 func normalizeContextualPlan(plan TurnPlan, message string) TurnPlan {
 	plan.RawText = strings.TrimSpace(message)
-	raw := strings.ToLower(plan.RawText)
+	raw := normalizePlayerText(plan.RawText)
 	if strings.Contains(raw, "do they have anything") {
 		plan.Actions = nil
 		plan.Questions = nil
@@ -76,43 +76,142 @@ func normalizeContextualPlan(plan TurnPlan, message string) TurnPlan {
 		}
 		return plan
 	}
+	if plan.NeedsClarification || len(plan.Actions) == 0 {
+		fallback := FallbackPlan(message)
+		if !fallback.NeedsClarification {
+			return fallback
+		}
+	}
+	if local, ok := compoundFallbackPlan(message); ok {
+		if shouldUseLocalCompoundPlan(plan, local) {
+			return local
+		}
+		return plan
+	}
+	forceSingle := func(in Intent, mode TargetMode) {
+		if in.Confidence == 0 {
+			in.Confidence = plan.Confidence
+		}
+		if in.Confidence < 0.7 {
+			in.Confidence = 0.8
+		}
+		if in.Modifiers == nil {
+			in.Modifiers = []string{}
+		}
+		in.RawText = plan.RawText
+		plan.Actions = []PlannedAction{{Intent: in, TargetMode: mode}}
+		plan.Questions = nil
+		plan.NeedsClarification = false
+		plan.ClarificationQuestion = ""
+		plan.Confidence = in.Confidence
+	}
 	if strings.Contains(raw, "search the doctors are they dead") {
-		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionSearch, Target: "doctors", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetAll}}
+		forceSingle(Intent{Action: ActionSearch, Target: "doctors"}, TargetAll)
 		plan.Questions = []FactQuestion{{Kind: game.FactLifeStatus, Target: "doctors", TargetMode: TargetAll}}
 		return plan
 	}
 	switch {
 	case strings.Contains(raw, "look around"), strings.Contains(raw, "what's in the room"), strings.Contains(raw, "what is in the room"), strings.Contains(raw, "see anything"), strings.Contains(raw, "anything around"):
-		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionInspect, Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetSingle}}
+		forceSingle(Intent{Action: ActionInspect}, TargetSingle)
+	case isFallbackInventoryQuestion(raw):
+		in := Intent{Action: ActionTalk}
+		if item := fallbackMentionedItem(raw); item != "" {
+			in.Item = item
+		} else {
+			in.Target = "inventory"
+		}
+		forceSingle(in, TargetSingle)
+	case isContainerContentsQuestion(raw):
+		forceSingle(Intent{Action: ActionSearch, Target: extractContainerQuestionTarget(message)}, TargetSingle)
+	case isFallbackItemLocationQuestion(raw) || isFallbackItemPresenceQuestion(raw):
+		forceSingle(Intent{Action: ActionTalk, Item: fallbackMentionedItem(raw)}, TargetSingle)
 	case strings.Contains(raw, "check the dead doctor"):
-		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionSearch, Target: "dead doctor's coat pockets", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetSingle}}
+		forceSingle(Intent{Action: ActionSearch, Target: "dead doctor's coat pockets"}, TargetSingle)
+	case isSearchMessage(raw) && shouldForceSearchPlan(plan):
+		forceSingle(Intent{Action: ActionSearch, Target: extractSearchTarget(message)}, TargetSingle)
 	case strings.Contains(raw, "go left"):
-		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionMove, Direction: "left", Modifiers: []string{"quietly"}, Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetSingle}}
+		forceSingle(Intent{Action: ActionMove, Direction: "left", Modifiers: []string{"quietly"}}, TargetSingle)
 	case strings.Contains(raw, "stay still"):
-		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionWait, Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetSingle}}
+		forceSingle(Intent{Action: ActionWait}, TargetSingle)
 	case strings.Contains(raw, "listen at the door"):
-		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionListen, Target: "door", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetSingle}}
+		forceSingle(Intent{Action: ActionListen, Target: "door"}, TargetSingle)
 	case strings.Contains(raw, "get behind the cabinet"):
-		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionHide, Target: "cabinet", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetSingle}}
+		forceSingle(Intent{Action: ActionHide, Target: "cabinet"}, TargetSingle)
 	case strings.Contains(raw, "key on the emergency stairwell door"):
-		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionUseItem, Target: "emergency stairwell door", Item: "key", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetSingle}}
+		forceSingle(Intent{Action: ActionUseItem, Target: "emergency stairwell door", Item: "key"}, TargetSingle)
 	case strings.Contains(raw, "throw the brick"):
-		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionThrow, Item: "brick", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetSingle}}
+		forceSingle(Intent{Action: ActionThrow, Item: "brick"}, TargetSingle)
 	case strings.Contains(raw, "inspect both doctors"):
-		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionInspect, Target: "doctors", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetAll}}
+		forceSingle(Intent{Action: ActionInspect, Target: "doctors"}, TargetAll)
 	case strings.Contains(raw, "inspect the doctors"):
-		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionInspect, Target: "doctors", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetAll}}
+		forceSingle(Intent{Action: ActionInspect, Target: "doctors"}, TargetAll)
 	case strings.Contains(raw, "inspect the doctor"):
-		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionInspect, Target: "doctor", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetSingle}}
+		forceSingle(Intent{Action: ActionInspect, Target: "doctor"}, TargetSingle)
 	case strings.Trim(raw, " .!?\t\n") == "search them":
-		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionSearch, Target: "them", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetAll}}
+		forceSingle(Intent{Action: ActionSearch, Target: "them"}, TargetAll)
 	case strings.Contains(raw, "feel along the walls"):
-		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionExplore, Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetSingle}}
+		forceSingle(Intent{Action: ActionExplore}, TargetSingle)
 	case strings.Contains(raw, "storage cabiner") || strings.Contains(raw, "isnide the storage"):
-		plan.Actions = []PlannedAction{{Intent: Intent{Action: ActionInspect, Target: "Storage Cabinet", Confidence: plan.Confidence, RawText: plan.RawText}, TargetMode: TargetSingle}}
+		forceSingle(Intent{Action: ActionInspect, Target: "Storage Cabinet"}, TargetSingle)
+	case isObjectInspectMessage(raw):
+		forceSingle(Intent{Action: ActionInspect, Target: extractObjectTarget(message)}, TargetSingle)
+	}
+	return normalizePlanTargetModes(plan)
+}
+
+func shouldUseLocalCompoundPlan(plan TurnPlan, local TurnPlan) bool {
+	if plan.NeedsClarification || len(plan.Actions) != len(local.Actions) {
+		return true
+	}
+	for i, localAction := range local.Actions {
+		planned := plan.Actions[i].Intent
+		if planned.Action != localAction.Intent.Action {
+			return true
+		}
+		if strings.TrimSpace(localAction.Intent.Target) != "" && strings.TrimSpace(planned.Target) == "" {
+			return true
+		}
+		if strings.TrimSpace(localAction.Intent.Item) != "" && strings.TrimSpace(planned.Item) == "" {
+			return true
+		}
+		if containsSequentialConnector(planned.Target) || containsSequentialConnector(planned.Item) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsSequentialConnector(value string) bool {
+	normalized := normalizePlayerText(value)
+	for _, word := range strings.Fields(normalized) {
+		if word == "and" || word == "then" {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldForceSearchPlan(plan TurnPlan) bool {
+	if len(plan.Actions) != 1 {
+		return true
+	}
+	in := plan.Actions[0].Intent
+	return in.Action != ActionSearch || strings.TrimSpace(in.Target) == ""
+}
+
+func normalizePlanTargetModes(plan TurnPlan) TurnPlan {
+	for i := range plan.Actions {
+		if plan.Actions[i].TargetMode == TargetAll && !allowsTargetAll(plan.Actions[i].Intent.Action) {
+			plan.Actions[i].TargetMode = TargetSingle
+		}
 	}
 	return plan
 }
+
+func allowsTargetAll(action Action) bool {
+	return action == ActionInspect || action == ActionSearch
+}
+
 func ParseTurnPlanJSON(raw string) (TurnPlan, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -432,6 +531,7 @@ func isDirection(value string) bool {
 }
 
 func isGeneralRoomAwareness(raw string, target string) bool {
+	raw = normalizePlayerText(raw)
 	target = strings.ToLower(strings.TrimSpace(target))
 	if target != "" &&
 		target != "room" &&
@@ -448,6 +548,10 @@ func isGeneralRoomAwareness(raw string, target string) bool {
 	return strings.Contains(raw, "look around") ||
 		strings.Contains(raw, "what's in") ||
 		strings.Contains(raw, "what is in") ||
+		strings.Contains(raw, "whats around") ||
+		strings.Contains(raw, "what's around") ||
+		strings.Contains(raw, "what is around") ||
+		strings.Contains(raw, "what do you see") ||
 		strings.Contains(raw, "anything around") ||
 		strings.Contains(raw, "see anything") ||
 		strings.Contains(raw, "anything useful")
@@ -459,8 +563,11 @@ func isKeyUse(raw string, item string) bool {
 }
 
 func isInventoryQuestion(raw string) bool {
+	raw = normalizePlayerText(raw)
+	if strings.Contains(raw, "in mind") {
+		return false
+	}
 	return strings.Contains(raw, "do you have") ||
-		strings.Contains(raw, "do ypou have") ||
 		strings.Contains(raw, "are you carrying") ||
 		strings.Contains(raw, "what do you have") ||
 		strings.Contains(raw, "what are you carrying") ||

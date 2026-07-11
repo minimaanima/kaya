@@ -106,6 +106,26 @@ func TestExecutorClarifiesAmbiguousFactQuestion(t *testing.T) {
 	}
 }
 
+func TestExecutorRemembersAmbiguousObjectChoicesForBoth(t *testing.T) {
+	state := newLitStorageState(t)
+	executor := NewExecutor(state)
+
+	first := executor.Execute(intent.TurnPlan{
+		Actions: []intent.PlannedAction{{Intent: intent.Intent{Action: intent.ActionSearch, Target: "doctor"}, TargetMode: intent.TargetSingle}},
+	})
+	if first.StopReason != string(game.ActionFailed) && first.StopReason != "target_ambiguous" {
+		t.Fatalf("first result = %#v, want ambiguity", first)
+	}
+
+	second := executor.Execute(intent.FallbackPlan("both"))
+	if len(second.Outcomes) != 2 {
+		t.Fatalf("outcomes = %#v, want two remembered doctors", second.Outcomes)
+	}
+	if second.Outcomes[0].TargetObjectID != scenario.ObjectBodyCabinet || second.Outcomes[1].TargetObjectID != scenario.ObjectBodyDoor {
+		t.Fatalf("order = %#v", second.Outcomes)
+	}
+}
+
 func TestFactBundlePreservesOptionalVisibleFact(t *testing.T) {
 	result := Result{Outcomes: []ActionOutcome{{Result: game.ActionResult{
 		Status:       game.ActionSucceeded,

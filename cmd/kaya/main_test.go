@@ -82,6 +82,20 @@ func TestParsePlayOptionsRejectsPositionals(t *testing.T) {
 	}
 }
 
+func TestParsePlayOptionsEnablesParseLog(t *testing.T) {
+	options, err := parsePlayOptions([]string{"--seed", "7", "--parse-log"}, func() (int64, error) { return 1, nil })
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Seed != 7 {
+		t.Fatalf("seed = %d, want 7", options.Seed)
+	}
+	if !options.ParseLog {
+		t.Fatal("ParseLog = false, want true")
+	}
+}
+
 func TestReadRunSeedRetriesZeroAndClearsSignBit(t *testing.T) {
 	var data [16]byte
 	binary.LittleEndian.PutUint64(data[8:], uint64(1)<<63|42)
@@ -115,6 +129,55 @@ func TestPrintRunDebugIncludesReproductionData(t *testing.T) {
 	}
 }
 
+func TestDebugOutputEnabledReadsKayaDebug(t *testing.T) {
+	t.Setenv("KAYA_DEBUG", "")
+	if debugOutputEnabled() {
+		t.Fatal("debugOutputEnabled() = true for empty KAYA_DEBUG")
+	}
+
+	t.Setenv("KAYA_DEBUG", "yes")
+	if !debugOutputEnabled() {
+		t.Fatal("debugOutputEnabled() = false for KAYA_DEBUG=yes")
+	}
+}
+
+func TestParseLogEnabledReadsEnvOrDebug(t *testing.T) {
+	t.Setenv("KAYA_DEBUG", "")
+	t.Setenv("KAYA_PARSE_LOG", "")
+	if parseLogEnabled() {
+		t.Fatal("parseLogEnabled() = true for empty env")
+	}
+
+	t.Setenv("KAYA_PARSE_LOG", "true")
+	if !parseLogEnabled() {
+		t.Fatal("parseLogEnabled() = false for KAYA_PARSE_LOG=true")
+	}
+
+	t.Setenv("KAYA_PARSE_LOG", "")
+	t.Setenv("KAYA_DEBUG", "1")
+	if !parseLogEnabled() {
+		t.Fatal("parseLogEnabled() = false when KAYA_DEBUG=1")
+	}
+}
+
+func TestFormatParseLogShowsActions(t *testing.T) {
+	plan := intent.TurnPlan{
+		Actions: []intent.PlannedAction{
+			{Intent: intent.Intent{Action: intent.ActionTakeItem, Target: "key", Confidence: 0.8}, TargetMode: intent.TargetSingle},
+			{Intent: intent.Intent{Action: intent.ActionMove, Direction: "north", Confidence: 0.9}, TargetMode: intent.TargetSingle},
+		},
+		Confidence: 0.75,
+	}
+
+	got := formatParseLog(plan)
+
+	for _, want := range []string{"parse:", "confidence=0.75", "1:take_item", "target=key", "2:move", "direction=north"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("parse log %q missing %q", got, want)
+		}
+	}
+}
+
 func mustGenerateTestRun(t *testing.T, seed int64) rungen.GeneratedRun {
 	t.Helper()
 	run, err := rungen.Generate(
@@ -138,14 +201,14 @@ func (f *fakePlaytestGenerator) GenerateJSON(ctx context.Context, systemPrompt s
 
 func TestRunPlaytestScriptMarksExpectedActionMismatchSuspicious(t *testing.T) {
 	parser := intent.NewParser(&fakePlaytestGenerator{responses: []string{`{
-		"actions": [{"intent": {"action": "inspect", "target": "", "item": "", "direction": "", "modifiers": [], "confidence": 0.9, "rawText": "what's in your bag", "needsClarification": false, "clarificationQuestion": ""}, "targetMode": "single"}],
-		"questions": [], "confidence": 0.9, "needsClarification": false, "clarificationQuestion": "", "rawText": "what's in your bag"
+		"actions": [{"intent": {"action": "inspect", "target": "", "item": "", "direction": "", "modifiers": [], "confidence": 0.9, "rawText": "tell me a joke", "needsClarification": false, "clarificationQuestion": ""}, "targetMode": "single"}],
+		"questions": [], "confidence": 0.9, "needsClarification": false, "clarificationQuestion": "", "rawText": "tell me a joke"
 	}`}})
 	script := playtestScript{
-		Name: "intent collision",
+		Name: "intent mismatch",
 		Steps: []playtestMessage{
 			{
-				Player: "what's in your bag",
+				Player: "tell me a joke",
 				Expect: playtestExpectation{
 					Action: intent.ActionTalk,
 				},
