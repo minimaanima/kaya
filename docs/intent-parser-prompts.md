@@ -297,3 +297,26 @@ Output:
   "clarificationQuestion": "What do you want Kaya to do?"
 }
 ```
+
+## Intent Corpus
+
+The shared intent corpus is the parser's semantic regression contract. Each case
+maps natural player text to an exact ordered plan while ignoring confidence and
+raw model wording.
+
+The deterministic corpus runs with the normal suite:
+
+```powershell
+go test ./internal/intent -run TestDeterministicIntentCorpus -v
+```
+
+Evaluate the configured Ollama model against the same cases with:
+
+```powershell
+$env:KAYA_OLLAMA_EVAL="1"
+go test ./internal/intent -run TestOllamaIntentCorpus -v -count=1
+```
+
+The live test reports every mismatch and requires at least 90 percent exact-match
+accuracy with zero parser errors. Add each parser regression to `intentCorpus`
+with an explicit expected semantic plan.
