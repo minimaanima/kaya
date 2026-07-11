@@ -317,6 +317,18 @@ $env:KAYA_OLLAMA_EVAL="1"
 go test ./internal/intent -run TestOllamaIntentCorpus -v -count=1
 ```
 
-The live test reports every mismatch and requires at least 90 percent exact-match
-accuracy with zero parser errors. Add each parser regression to `intentCorpus`
-with an explicit expected semantic plan.
+The live test calls the configured Ollama generator through the real `Parser`
+path and reports two exact-match metrics:
+
+- **Raw model accuracy** compares the successfully decoded model plan before
+  deterministic canonicalization. This is diagnostic and is not the acceptance
+  threshold.
+- **Resolved parser accuracy** compares the final plan returned after parser
+  normalization and deterministic assistance. This must be at least 90 percent.
+
+The report also counts repaired plans and plans that were canonicalized or
+fallback-assisted. An initial generation failure, a failed required repair, or
+output that still cannot be decoded causes the evaluation to fail even when the
+deterministic fallback produces the expected resolved plan. Generator/decoding
+fallback errors must therefore be zero. Add each parser regression to
+`intentCorpus` with an explicit expected semantic plan.

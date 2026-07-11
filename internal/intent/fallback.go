@@ -283,11 +283,14 @@ func extractThrowParts(message string) (item string, target string) {
 		return "", ""
 	}
 	rest := strings.TrimSpace(low[index+len("throw"):])
-	if split := strings.Index(rest, " down "); split >= 0 {
-		item = cleanTargetPrefix(rest[:split])
-		target = cleanTargetPrefix(rest[split+len(" down "):])
+	for _, separator := range []string{" down ", " at "} {
+		if split := strings.Index(rest, separator); split >= 0 {
+			item = cleanTargetPrefix(rest[:split])
+			target = cleanTargetPrefix(rest[split+len(separator):])
+			return item, target
+		}
 	}
-	return item, target
+	return "", ""
 }
 
 func extractUseItemParts(message string) (item string, target string) {

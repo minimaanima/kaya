@@ -234,35 +234,33 @@ func TestOllamaIntentCorpus(t *testing.T) {
 
 	for _, tc := range intentCorpus {
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-		plan, parseErr := parser.Parse(ctx, tc.Message, game.PerceptionSnapshot{})
+		plan, provenance, parseErr := parser.ParseWithProvenance(ctx, tc.Message, game.PerceptionSnapshot{})
 		cancel()
 		if parseErr != nil {
-			eval.RecordError(fmt.Sprintf("%s (%q): %v", tc.Name, tc.Message, parseErr))
+			eval.Errors = append(eval.Errors, fmt.Sprintf("%s (%q): parser error: %v", tc.Name, tc.Message, parseErr))
 			continue
 		}
-		got := semanticPlanFrom(plan)
-		if validErr := validateSemanticPlan(got); validErr != nil {
-			eval.RecordError(fmt.Sprintf("%s (%q): invalid plan: %v", tc.Name, tc.Message, validErr))
-			continue
-		}
-		if diff := compareSemanticPlans(tc.Want, got); diff != "" {
-			eval.RecordMismatch(fmt.Sprintf("%s (%q):\n%s", tc.Name, tc.Message, diff))
-			continue
-		}
-		eval.RecordMatch()
+		eval.Record(tc, plan, provenance)
 	}
 
-	for _, mismatch := range eval.Mismatches {
-		t.Logf("MISMATCH: %s", mismatch)
+	for _, mismatch := range eval.RawMismatches {
+		t.Logf("RAW MISMATCH: %s", mismatch)
+	}
+	for _, mismatch := range eval.ResolvedMismatches {
+		t.Logf("RESOLVED MISMATCH: %s", mismatch)
 	}
 	for _, parseError := range eval.Errors {
 		t.Logf("ERROR: %s", parseError)
 	}
-	t.Logf("intent corpus: %d/%d exact matches, %d mismatches, %d errors, %.1f%% accuracy",
-		eval.Matches, eval.Total, len(eval.Mismatches), len(eval.Errors), eval.Accuracy())
+	t.Logf("raw model: %d/%d exact matches, %d mismatches, %.1f%% accuracy",
+		eval.RawMatches, eval.Total, len(eval.RawMismatches), eval.RawAccuracy())
+	t.Logf("resolved parser: %d/%d exact matches, %d mismatches, %.1f%% accuracy (threshold 90.0%%)",
+		eval.ResolvedMatches, eval.Total, len(eval.ResolvedMismatches), eval.ResolvedAccuracy())
+	t.Logf("resolution diagnostics: %d canonicalized/fallback-assisted, %d repaired, %d generator/decoding fallback errors, %d total errors",
+		eval.FallbackAssisted, eval.Repairs, eval.FallbackErrorCount, len(eval.Errors))
 	if eval.Fails(90) {
-		t.Fatalf("Ollama intent corpus failed: accuracy %.1f%%, threshold 90.0%%, errors %d",
-			eval.Accuracy(), len(eval.Errors))
+		t.Fatalf("Ollama intent corpus failed: resolved accuracy %.1f%%, threshold 90.0%%, generator/decoding fallback errors %d, total errors %d",
+			eval.ResolvedAccuracy(), eval.FallbackErrorCount, len(eval.Errors))
 	}
 }
 

@@ -34,6 +34,46 @@ func (f *fakeGenerator) GenerateJSON(ctx context.Context, systemPrompt, userProm
 	return f.Generate(ctx, systemPrompt, userPrompt)
 }
 
+func TestParserProvenanceReportsGeneratorFallback(t *testing.T) {
+	parser := NewParser(&fakeGenerator{err: errors.New("ollama unreachable")})
+	plan, provenance, err := parser.ParseWithProvenance(context.Background(), "go east", game.PerceptionSnapshot{})
+	if err != nil {
+		t.Fatalf("ParseWithProvenance returned gameplay error: %v", err)
+	}
+	if len(plan.Actions) != 1 || plan.Actions[0].Intent.Action != ActionMove {
+		t.Fatalf("plan = %#v, want deterministic gameplay fallback", plan)
+	}
+	if provenance.Source != ParseSourceFallback || provenance.FallbackError == nil {
+		t.Fatalf("provenance = %#v, want failing generator fallback", provenance)
+	}
+	if provenance.HasRawPlan {
+		t.Fatalf("provenance = %#v, failed generation cannot have a raw model plan", provenance)
+	}
+}
+
+func TestParserProvenanceSeparatesRawAndResolvedPlans(t *testing.T) {
+	message := "go east"
+	wrong := modelAction(ActionExplore, "room", "", "")
+	parser := NewParser(&fakeGenerator{responses: []string{modelPlanJSON(t, message, wrong)}})
+
+	resolved, provenance, err := parser.ParseWithProvenance(context.Background(), message, game.PerceptionSnapshot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provenance.Source != ParseSourceModel || !provenance.HasRawPlan || provenance.FallbackError != nil {
+		t.Fatalf("provenance = %#v, want successfully decoded model source", provenance)
+	}
+	if len(provenance.RawPlan.Actions) != 1 || provenance.RawPlan.Actions[0].Intent.Action != ActionExplore {
+		t.Fatalf("raw plan = %#v, want the model's wrong explore action", provenance.RawPlan)
+	}
+	if len(resolved.Actions) != 1 || resolved.Actions[0].Intent.Action != ActionMove || resolved.Actions[0].Intent.Direction != "east" {
+		t.Fatalf("resolved plan = %#v, want canonical move east", resolved)
+	}
+	if !provenance.Canonicalized {
+		t.Fatalf("provenance = %#v, want canonicalization recorded", provenance)
+	}
+}
+
 func TestParserParsesPluralCompoundTurn(t *testing.T) {
 	generator := &fakeGenerator{responses: []string{`{
 		"actions":[{"intent":{"action":"search","target":"doctors","item":"","direction":"","modifiers":[],"confidence":0.96,"rawText":"search the doctors","needsClarification":false,"clarificationQuestion":""},"targetMode":"all"}],
@@ -54,6 +94,26 @@ func TestFallbackPlanExploresWalls(t *testing.T) {
 	plan := FallbackPlan("feel along the walls for another exit")
 	if len(plan.Actions) != 1 || plan.Actions[0].Intent.Action != ActionExplore {
 		t.Fatalf("plan = %#v", plan)
+	}
+}
+
+func TestFallbackPlanParsesThrowAtTarget(t *testing.T) {
+	plan := FallbackPlan("throw the brick at the window")
+	if len(plan.Actions) != 1 {
+		t.Fatalf("actions = %#v, want one throw action", plan.Actions)
+	}
+	got := plan.Actions[0].Intent
+	if got.Action != ActionThrow || got.Item != "brick" || got.Target != "window" {
+		t.Fatalf("intent = %#v, want throw item=brick target=window", got)
+	}
+}
+
+func TestCanonicalFallbackRequiresCompleteThrowFields(t *testing.T) {
+	if !isCanonicalFallback(FallbackPlan("throw the brick at the window"), "throw the brick at the window") {
+		t.Fatal("complete throw fallback should be canonical")
+	}
+	if isCanonicalFallback(FallbackPlan("throw the brick toward the window"), "throw the brick toward the window") {
+		t.Fatal("throw fallback without item and target should not be canonical")
 	}
 }
 
@@ -470,6 +530,19 @@ func TestParserKeepsCompatibleModelModifiersWithCanonicalFallbackFields(t *testi
 	}
 }
 
+func TestParserPreservesRicherThrowWhenFallbackIsIncomplete(t *testing.T) {
+	message := "throw the brick toward the window"
+	model := modelAction(ActionThrow, "window", "brick", "")
+	got, err := NewParser(&fakeGenerator{responses: []string{modelPlanJSON(t, message, model)}}).Parse(context.Background(), message, game.PerceptionSnapshot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved := got.Actions[0]
+	if resolved.Intent.Action != ActionThrow || resolved.Intent.Item != "brick" || resolved.Intent.Target != "window" || resolved.TargetMode != TargetSingle {
+		t.Fatalf("action = %#v, want richer model throw semantics", resolved)
+	}
+}
+
 func TestMergeCanonicalActionSemantics(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -500,6 +573,18 @@ func TestMergeCanonicalActionSemantics(t *testing.T) {
 			canonical: modelAction(ActionMove, "", "", "east"),
 			model:     modelAction(ActionMove, "", "", "west"),
 			want:      modelAction(ActionMove, "", "", "east"),
+		},
+		{
+			name:      "enriches incomplete throw fields",
+			canonical: modelAction(ActionThrow, "", "", ""),
+			model:     modelAction(ActionThrow, "window", "brick", ""),
+			want:      modelAction(ActionThrow, "window", "brick", ""),
+		},
+		{
+			name:      "rejects conflicting throw fields",
+			canonical: modelAction(ActionThrow, "window", "brick", ""),
+			model:     modelAction(ActionThrow, "door", "stone", ""),
+			want:      modelAction(ActionThrow, "window", "brick", ""),
 		},
 		{
 			name:      "preserves compatible all target mode",

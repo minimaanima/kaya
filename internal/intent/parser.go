@@ -23,17 +23,39 @@ type Parser struct {
 	generator StructuredGenerator
 }
 
+type ParseSource string
+
+const (
+	ParseSourceModel    ParseSource = "model"
+	ParseSourceRepair   ParseSource = "repair"
+	ParseSourceFallback ParseSource = "fallback"
+)
+
+type ParseProvenance struct {
+	Source        ParseSource
+	RawPlan       TurnPlan
+	HasRawPlan    bool
+	Canonicalized bool
+	RepairReason  error
+	FallbackError error
+}
+
 func NewParser(generator StructuredGenerator) Parser {
 	return Parser{generator: generator}
 }
 
 func (p Parser) Parse(ctx context.Context, message string, snapshot game.PerceptionSnapshot) (TurnPlan, error) {
+	plan, _, err := p.ParseWithProvenance(ctx, message, snapshot)
+	return plan, err
+}
+
+func (p Parser) ParseWithProvenance(ctx context.Context, message string, snapshot game.PerceptionSnapshot) (TurnPlan, ParseProvenance, error) {
 	message = strings.TrimSpace(message)
 	if message == "" {
-		return TurnPlan{}, ErrEmptyMessage
+		return TurnPlan{}, ParseProvenance{}, ErrEmptyMessage
 	}
 	if p.generator == nil {
-		return FallbackPlan(message), nil
+		return parserFallback(message, nil, errors.New("intent parser has no generator"))
 	}
 
 	payload, err := json.Marshal(struct {
@@ -41,26 +63,89 @@ func (p Parser) Parse(ctx context.Context, message string, snapshot game.Percept
 		Perception game.PerceptionSnapshot `json:"perception"`
 	}{message, snapshot})
 	if err != nil {
-		return TurnPlan{}, fmt.Errorf("encode parser input: %w", err)
+		return TurnPlan{}, ParseProvenance{}, fmt.Errorf("encode parser input: %w", err)
 	}
 	raw, err := p.generator.GenerateJSON(ctx, SystemPrompt, string(payload), TurnPlanSchema)
 	if err != nil {
-		return FallbackPlan(message), nil
+		return parserFallback(message, nil, fmt.Errorf("generate turn plan: %w", err))
 	}
 
-	plan, parseErr := ParseTurnPlanJSON(raw)
-	if parseErr == nil {
-		return normalizeContextualPlan(plan, message), nil
+	plan, initialDecodeErr := ParseTurnPlanJSON(raw)
+	if initialDecodeErr == nil {
+		return resolvedModelPlan(plan, message, ParseSourceModel, nil)
 	}
 	repaired, repairErr := p.generator.GenerateJSON(ctx, RepairPrompt, raw, TurnPlanSchema)
 	if repairErr != nil {
-		return FallbackPlan(message), nil
+		return parserFallback(message, initialDecodeErr, fmt.Errorf("generate repaired turn plan: %w", repairErr))
 	}
-	plan, parseErr = ParseTurnPlanJSON(repaired)
-	if parseErr != nil {
-		return FallbackPlan(message), nil
+	plan, repairedDecodeErr := ParseTurnPlanJSON(repaired)
+	if repairedDecodeErr != nil {
+		return parserFallback(message, initialDecodeErr, fmt.Errorf("decode repaired turn plan: %w", repairedDecodeErr))
 	}
-	return normalizeContextualPlan(plan, message), nil
+	return resolvedModelPlan(plan, message, ParseSourceRepair, initialDecodeErr)
+}
+
+func parserFallback(message string, repairReason, fallbackErr error) (TurnPlan, ParseProvenance, error) {
+	return FallbackPlan(message), ParseProvenance{
+		Source:        ParseSourceFallback,
+		RepairReason:  repairReason,
+		FallbackError: fallbackErr,
+	}, nil
+}
+
+func resolvedModelPlan(raw TurnPlan, message string, source ParseSource, repairReason error) (TurnPlan, ParseProvenance, error) {
+	resolved := normalizeContextualPlan(cloneTurnPlan(raw), message)
+	return resolved, ParseProvenance{
+		Source:        source,
+		RawPlan:       raw,
+		HasRawPlan:    true,
+		Canonicalized: !samePlanSemantics(raw, resolved),
+		RepairReason:  repairReason,
+	}, nil
+}
+
+func cloneTurnPlan(plan TurnPlan) TurnPlan {
+	plan.Actions = append([]PlannedAction(nil), plan.Actions...)
+	for i := range plan.Actions {
+		plan.Actions[i].Intent.Modifiers = append([]string(nil), plan.Actions[i].Intent.Modifiers...)
+	}
+	plan.Questions = append([]FactQuestion(nil), plan.Questions...)
+	return plan
+}
+
+func samePlanSemantics(left, right TurnPlan) bool {
+	if left.NeedsClarification != right.NeedsClarification || len(left.Actions) != len(right.Actions) || len(left.Questions) != len(right.Questions) {
+		return false
+	}
+	for i := range left.Actions {
+		leftAction, rightAction := left.Actions[i], right.Actions[i]
+		if leftAction.TargetMode != rightAction.TargetMode ||
+			leftAction.Intent.Action != rightAction.Intent.Action ||
+			leftAction.Intent.Target != rightAction.Intent.Target ||
+			leftAction.Intent.Item != rightAction.Intent.Item ||
+			leftAction.Intent.Direction != rightAction.Intent.Direction ||
+			!sameStrings(leftAction.Intent.Modifiers, rightAction.Intent.Modifiers) {
+			return false
+		}
+	}
+	for i := range left.Questions {
+		if left.Questions[i] != right.Questions[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func sameStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeContextualPlan(plan TurnPlan, message string) TurnPlan {
@@ -142,8 +227,6 @@ func normalizeContextualPlan(plan TurnPlan, message string) TurnPlan {
 		forceSingle(Intent{Action: ActionHide, Target: "cabinet"}, TargetSingle)
 	case strings.Contains(raw, "key on the emergency stairwell door"):
 		forceSingle(Intent{Action: ActionUseItem, Target: "emergency stairwell door", Item: "key"}, TargetSingle)
-	case strings.Contains(raw, "throw the brick"):
-		forceSingle(Intent{Action: ActionThrow, Item: "brick"}, TargetSingle)
 	case strings.Contains(raw, "inspect both doctors"):
 		forceSingle(Intent{Action: ActionInspect, Target: "doctors"}, TargetAll)
 	case strings.Contains(raw, "inspect the doctors"):
@@ -164,17 +247,16 @@ func normalizeContextualPlan(plan TurnPlan, message string) TurnPlan {
 
 func canonicalFallbackPlan(plan TurnPlan, message string) (TurnPlan, bool) {
 	local := FallbackPlan(message)
-	if !isCanonicalFallback(local, message) {
-		return TurnPlan{}, false
-	}
 	if preservesRepeatedWait(plan, local, message) {
 		return plan, true
 	}
-	if !hasCompatibleFallbackActions(plan, local) {
-		return local, true
+	if hasCompatibleFallbackActions(plan, local) {
+		for i := range local.Actions {
+			local.Actions[i] = mergeCanonicalAction(local.Actions[i], plan.Actions[i])
+		}
 	}
-	for i := range local.Actions {
-		local.Actions[i] = mergeCanonicalAction(local.Actions[i], plan.Actions[i])
+	if !isCanonicalFallback(local, message) {
+		return TurnPlan{}, false
 	}
 	if len(local.Actions) == 1 && local.Actions[0].Intent.Action == ActionInspect && strings.Contains(normalizePlayerText(message), "doctors") {
 		local.Actions[0].TargetMode = TargetAll
@@ -183,10 +265,42 @@ func canonicalFallbackPlan(plan TurnPlan, message string) (TurnPlan, bool) {
 }
 
 func isCanonicalFallback(plan TurnPlan, message string) bool {
-	if !plan.NeedsClarification {
-		return plan.Confidence > 0 && len(plan.Actions) > 0
+	if plan.NeedsClarification {
+		return isOpenEndedIntentQuestion(message)
 	}
-	return isOpenEndedIntentQuestion(message)
+	if plan.Confidence <= 0 || len(plan.Actions) == 0 {
+		return false
+	}
+	for _, action := range plan.Actions {
+		if !isCompleteCanonicalAction(action.Intent) {
+			return false
+		}
+	}
+	return true
+}
+
+func isCompleteCanonicalAction(in Intent) bool {
+	hasTarget := strings.TrimSpace(in.Target) != ""
+	hasItem := strings.TrimSpace(in.Item) != ""
+	hasDirection := strings.TrimSpace(in.Direction) != ""
+	switch in.Action {
+	case ActionMove:
+		return hasDirection
+	case ActionTakeItem, ActionHide:
+		return hasTarget
+	case ActionTurnOn, ActionTurnOff:
+		return hasItem
+	case ActionThrow, ActionUseItem:
+		return hasItem && hasTarget
+	case ActionSearch:
+		return hasTarget
+	case ActionTalk:
+		return hasTarget || hasItem
+	case ActionInspect, ActionWait, ActionListen, ActionExplore:
+		return true
+	default:
+		return false
+	}
 }
 
 func isOpenEndedIntentQuestion(message string) bool {
@@ -208,6 +322,9 @@ func mergeCanonicalAction(canonical, model PlannedAction) PlannedAction {
 	if isRefinedCanonicalField(model.Intent.Target, canonical.Intent.Target) {
 		canonical.Intent.Target = model.Intent.Target
 	}
+	if preservesCompatibleTarget(canonical.Intent.Action, canonical.Intent.Target, model.Intent.Target) {
+		canonical.Intent.Target = model.Intent.Target
+	}
 	if preservesCompatibleItem(canonical.Intent.Action, canonical.Intent.Item, model.Intent.Item) {
 		canonical.Intent.Item = model.Intent.Item
 	}
@@ -220,12 +337,16 @@ func mergeCanonicalAction(canonical, model PlannedAction) PlannedAction {
 	return canonical
 }
 
+func preservesCompatibleTarget(action Action, canonical, model string) bool {
+	return action == ActionThrow && strings.TrimSpace(canonical) == "" && strings.TrimSpace(model) != ""
+}
+
 func preservesCompatibleItem(action Action, canonical, model string) bool {
 	if strings.TrimSpace(canonical) != "" || strings.TrimSpace(model) == "" {
 		return false
 	}
 	switch action {
-	case ActionInspect, ActionSearch:
+	case ActionInspect, ActionSearch, ActionThrow:
 		return true
 	default:
 		return false
