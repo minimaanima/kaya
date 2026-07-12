@@ -13,12 +13,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"kaya/internal/game"
 	"kaya/internal/intent"
 	kayastate "kaya/internal/kaya"
 	"kaya/internal/llm"
+	"kaya/internal/playtest"
 	"kaya/internal/response"
 	"kaya/internal/rungen"
 	"kaya/internal/runscenario"
@@ -48,7 +48,7 @@ func main() {
 			os.Exit(1)
 		}
 	case "playtest":
-		if err := runPlaytest(); err != nil {
+		if err := runPlaytest(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -202,44 +202,42 @@ func resultDuration(result turn.Result) int {
 	return session.ResultDuration(result)
 }
 
-func runPlaytest() error {
-	model := envOrDefault("KAYA_OLLAMA_MODEL", defaultOllamaModel)
-	baseURL := envOrDefault("KAYA_OLLAMA_URL", llm.DefaultOllamaURL)
-
-	client, err := llm.NewOllamaClient(model, llm.WithOllamaBaseURL(baseURL))
+func runPlaytest(args []string) error {
+	options, err := parsePlaytestOptions(args, newRunSeed)
 	if err != nil {
 		return err
 	}
 
-	parser := intent.NewParser(client)
-	composer := response.NewComposer(client)
-	run := playtestRun{
-		Model:     model,
-		BaseURL:   baseURL,
-		StartedAt: time.Now(),
+	definition := runscenario.PrototypeDefinition()
+	generated, err := rungen.Generate(
+		rungen.RunConfig{Seed: options.Seed, GeneratorVersion: rungen.CurrentGeneratorVersion},
+		definition,
+	)
+	if err != nil {
+		return fmt.Errorf("generate playtest run: %w", err)
 	}
 
-	for _, script := range defaultPlaytestScripts() {
-		runScript, err := runPlaytestScript(parser, script, composer)
+	var parser session.Parser = intent.NewParser(nil)
+	var composer session.Composer = response.NewComposer(nil)
+	if envBool("KAYA_PLAYTEST_OLLAMA") {
+		model := envOrDefault("KAYA_OLLAMA_MODEL", defaultOllamaModel)
+		baseURL := envOrDefault("KAYA_OLLAMA_URL", llm.DefaultOllamaURL)
+		client, err := llm.NewOllamaClient(model, llm.WithOllamaBaseURL(baseURL))
 		if err != nil {
 			return err
 		}
-		run.Scripts = append(run.Scripts, runScript)
+		parser = intent.NewParser(client)
+		composer = response.NewComposer(client)
 	}
 
-	logPath, err := writePlaytestLog(run)
-	if err != nil {
-		return err
+	runner := playtest.NewRunner(definition, generated, parser, composer)
+	runErr := playtest.RunPrototypeSession(context.Background(), runner, generated, options.Seed)
+	logPath, logErr := writePlaytestLog(runner.Session())
+	if logErr != nil {
+		return logErr
 	}
-
 	fmt.Println("Playtest log:", logPath)
-	for _, script := range run.Scripts {
-		fmt.Printf("- %s: %d steps, %d suspicious\n", script.Name, len(script.Steps), len(script.Suspicious))
-		for _, note := range script.Suspicious {
-			fmt.Println("  -", note)
-		}
-	}
-	return nil
+	return runErr
 }
 
 type playOptions struct {
@@ -274,6 +272,10 @@ func parsePlayOptions(args []string, generateSeed func() (int64, error)) (playOp
 		return playOptions{}, err
 	}
 	return playOptions{Seed: generated, ParseLog: *parseLog}, nil
+}
+
+func parsePlaytestOptions(args []string, generateSeed func() (int64, error)) (playOptions, error) {
+	return parsePlayOptions(args, generateSeed)
 }
 
 func newRunSeed() (int64, error) {
@@ -455,13 +457,6 @@ type playtestExpectation struct {
 	// Action and Outcome are kept for compatibility with older local scripts.
 	Action  intent.Action
 	Outcome string
-}
-
-type playtestRun struct {
-	Model     string
-	BaseURL   string
-	StartedAt time.Time
-	Scripts   []playtestScriptLog
 }
 
 type playtestScriptLog struct {
@@ -790,77 +785,18 @@ func expectationMismatches(expect playtestExpectation, plan intent.TurnPlan, res
 	return mismatches
 }
 
-func writePlaytestLog(run playtestRun) (string, error) {
+func playtestLogPath(seed int64) string {
+	return filepath.Join("playtest_logs", fmt.Sprintf("seed-%d.md", seed))
+}
+
+// writePlaytestLog remains the CLI compatibility wrapper for canonical transcripts.
+func writePlaytestLog(session playtest.Session) (string, error) {
 	if err := os.MkdirAll("playtest_logs", 0o755); err != nil {
 		return "", fmt.Errorf("create playtest_logs: %w", err)
 	}
 
-	path := filepath.Join("playtest_logs", run.StartedAt.Format("20060102-150405")+".md")
-	var b strings.Builder
-	b.WriteString("# Kaya Playtest Log\n\n")
-	b.WriteString(fmt.Sprintf("- Started: %s\n", run.StartedAt.Format(time.RFC3339)))
-	b.WriteString(fmt.Sprintf("- Model: `%s`\n", run.Model))
-	b.WriteString(fmt.Sprintf("- Ollama URL: `%s`\n\n", run.BaseURL))
-
-	for _, script := range run.Scripts {
-		b.WriteString(fmt.Sprintf("## %s\n\n", script.Name))
-		if len(script.Suspicious) == 0 {
-			b.WriteString("Suspicious outcomes: none\n\n")
-		} else {
-			b.WriteString("Suspicious outcomes:\n\n")
-			for _, note := range script.Suspicious {
-				b.WriteString("- ")
-				b.WriteString(note)
-				b.WriteString("\n")
-			}
-			b.WriteString("\n")
-		}
-
-		for _, step := range script.Steps {
-			b.WriteString(fmt.Sprintf("### Step %d\n\n", step.Number))
-			b.WriteString(fmt.Sprintf("Player: `%s`\n\n", step.Player))
-			b.WriteString(fmt.Sprintf("Before: room=`%s`, time=`%d`, light=`%t`, inventory=`%s`, discovered=`%s`, kaya=`%s`\n\n", step.Before.Room, step.Before.Time, step.Before.LightOn, strings.Join(step.Before.Inventory, ", "), strings.Join(step.Before.Discovered, ", "), formatKayaState(step.Before.Kaya)))
-			if !step.Expected.empty() {
-				expectedAction := step.Expected.FirstAction
-				if expectedAction == "" {
-					expectedAction = step.Expected.Action
-				}
-				expectedOutcome := step.Expected.FirstOutcome
-				if expectedOutcome == "" {
-					expectedOutcome = step.Expected.Outcome
-				}
-				b.WriteString(fmt.Sprintf("Expected: firstAction=`%s`, firstOutcome=`%s`, outcomeCount=`%d`, questionKind=`%s`, questionCount=`%d`, requireFact=`%s`, forbidFact=`%s`\n\n", expectedAction, expectedOutcome, step.Expected.OutcomeCount, step.Expected.QuestionKind, step.Expected.QuestionCount, step.Expected.RequireFactText, step.Expected.ForbidFactText))
-			}
-			if step.ParseError != "" {
-				b.WriteString("Parse error: `")
-				b.WriteString(step.ParseError)
-				b.WriteString("`\n\n")
-				continue
-			}
-			b.WriteString(fmt.Sprintf("Turn plan: actions=`%d`, questions=`%d`, confidence=`%.2f`, clarification=`%t`\n\n", len(step.Plan.Actions), len(step.Plan.Questions), step.Plan.Confidence, step.Plan.NeedsClarification))
-			for i, action := range step.Plan.Actions {
-				b.WriteString(fmt.Sprintf("- Action %d: `%s` target=`%s`, item=`%s`, direction=`%s`, targetMode=`%s`\n", i+1, action.Intent.Action, action.Intent.Target, action.Intent.Item, action.Intent.Direction, action.TargetMode))
-			}
-			b.WriteString(fmt.Sprintf("Result: outcomes=`%d`, stop=`%s`, clarification=`%s`\n\n", len(step.Result.Outcomes), step.Result.StopReason, step.Result.ClarificationQuestion))
-			for i, outcome := range step.Result.Outcomes {
-				b.WriteString(fmt.Sprintf("- Outcome %d: `%s`, status=`%s`, duration=`%d`\n", i+1, outcome.Result.Outcome, outcome.Result.Status, outcome.Result.DurationSeconds))
-			}
-			b.WriteString(fmt.Sprintf("Response: `%s`, fallback=`%t`, reason=`%s`\n\n", step.Response.Text, step.Response.UsedFallback, step.Response.FallbackReason))
-			for _, fact := range step.Result.FactBundle(step.Player).Facts {
-				b.WriteString("- Kaya: ")
-				b.WriteString(fact.Text)
-				b.WriteString("\n")
-			}
-			if step.Suspicious {
-				b.WriteString("- Suspicious: `")
-				b.WriteString(step.Suspicion)
-				b.WriteString("`\n")
-			}
-			b.WriteString(fmt.Sprintf("\nAfter: room=`%s`, time=`%d`, light=`%t`, inventory=`%s`, discovered=`%s`, kaya=`%s`\n\n", step.After.Room, step.After.Time, step.After.LightOn, strings.Join(step.After.Inventory, ", "), strings.Join(step.After.Discovered, ", "), formatKayaState(step.After.Kaya)))
-		}
-	}
-
-	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+	path := playtestLogPath(session.Seed)
+	if err := os.WriteFile(path, []byte(playtest.RenderMarkdown(session)), 0o644); err != nil {
 		return "", fmt.Errorf("write playtest log: %w", err)
 	}
 	return path, nil

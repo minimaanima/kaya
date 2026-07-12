@@ -5,11 +5,14 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"kaya/internal/game"
 	"kaya/internal/intent"
+	"kaya/internal/playtest"
 	"kaya/internal/response"
 	"kaya/internal/rungen"
 	"kaya/internal/runscenario"
@@ -93,6 +96,63 @@ func TestParsePlayOptionsEnablesParseLog(t *testing.T) {
 	}
 	if !options.ParseLog {
 		t.Fatal("ParseLog = false, want true")
+	}
+}
+
+func TestParsePlaytestOptionsUsesExistingPlayOptionBehavior(t *testing.T) {
+	options, err := parsePlaytestOptions([]string{"--seed", "-42", "--parse-log"}, func() (int64, error) { return 99, nil })
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Seed != -42 || !options.ParseLog {
+		t.Fatalf("options = %#v, want explicit seed and parse log", options)
+	}
+}
+
+func TestPlaytestLogPathIncludesFilesystemSafeSeed(t *testing.T) {
+	got := playtestLogPath(-42)
+	want := filepath.Join("playtest_logs", "seed--42.md")
+	if got != want {
+		t.Fatalf("path = %q, want %q", got, want)
+	}
+}
+
+func TestWritePlaytestLogDelegatesToRenderMarkdown(t *testing.T) {
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	temporaryDirectory, err := os.MkdirTemp("", "kaya-playtest-log-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if changeErr := os.Chdir(workingDirectory); changeErr != nil {
+			t.Error(changeErr)
+		}
+		if removeErr := os.RemoveAll(temporaryDirectory); removeErr != nil {
+			t.Error(removeErr)
+		}
+	})
+	if err := os.Chdir(temporaryDirectory); err != nil {
+		t.Fatal(err)
+	}
+
+	session := playtest.Session{ScenarioID: "prototype", Seed: 42}
+	path, err := writePlaytestLog(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != filepath.Join("playtest_logs", "seed-42.md") {
+		t.Fatalf("path = %q", path)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := playtest.RenderMarkdown(session); string(got) != want {
+		t.Fatalf("log differs from canonical transcript:\n%s", got)
 	}
 }
 
