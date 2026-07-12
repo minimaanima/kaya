@@ -271,6 +271,10 @@ Exit criteria:
 
 ## Phase 8 - First Playable Scenario
 
+Status:
+
+Blocked pending live Ollama response certification. The hardened deterministic prototype, all nine generated placements, and manual routes complete, but the opt-in live gate still observes response-generation fallback for ungrounded model prose.
+
 Goal:
 
 Build the first complete playable slice.

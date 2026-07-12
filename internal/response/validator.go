@@ -21,10 +21,11 @@ var claimTokenPattern = regexp.MustCompile(`[\p{L}\p{N}]+(?:['’][\p{L}]+)?`)
 var safeVoiceLexicon = func() map[string]bool {
 	words := strings.Fields(`a an the i me my we our you your it its this that these those they them their
 	here there’s there's now i'm i've they're they're
-is are was were be been being am can cannot could should
+is are was were be been being am can cannot could should have
 	no not yes and or but if then as so very still only just all both one first second
 	in on at by near beside next to from into of for with without around through inside outside
-	to feel along seconds second minute minutes`)
+	to feel along seconds second minute minutes view views include includes exit access take stand where
+	five passed since arrival observation began observing space`)
 	lexicon := make(map[string]bool, len(words))
 	for _, word := range words {
 		lexicon[word] = true
@@ -124,9 +125,9 @@ func hasUnsupportedClaim(draft ResponseDraft, bundle turn.FactBundle) bool {
 }
 
 func approvedEntity(candidate string, approved []string) bool {
-	candidate = strings.ToLower(strings.Join(strings.Fields(candidate), " "))
+	candidate = normalizedEntityWords(candidate)
 	for _, field := range approved {
-		field = strings.ToLower(strings.Join(strings.Fields(field), " "))
+		field = normalizedEntityWords(field)
 		if strings.Contains(" "+field+" ", " "+candidate+" ") {
 			return true
 		}
@@ -137,4 +138,8 @@ func approvedEntity(candidate string, approved []string) bool {
 		}
 	}
 	return false
+}
+
+func normalizedEntityWords(value string) string {
+	return strings.Join(claimTokenPattern.FindAllString(strings.ToLower(value), -1), " ")
 }

@@ -44,6 +44,36 @@ func TestComposerRejectsUnknownNamedEntity(t *testing.T) {
 	}
 }
 
+func TestComposerAcceptsApprovedEntitiesAdjacentToPunctuation(t *testing.T) {
+	bundle := turn.FactBundle{Facts: []game.Fact{{
+		ID:       "f001",
+		Kind:     game.FactVisibleObjects,
+		Subject:  "reception",
+		Value:    "Reception Desk, Reception Floor",
+		Text:     "I can see: Reception Desk, Reception Floor.",
+		Required: true,
+	}}}
+	gen := &fakeGenerator{raw: `{"sentences":[{"factIds":["f001"],"text":"I can see: Reception Desk, Reception Floor."}]}`}
+	got := NewComposer(gen).Compose(context.Background(), bundle)
+	if got.UsedFallback {
+		t.Fatalf("response = %#v, want accepted approved entities", got)
+	}
+}
+
+func TestComposerAcceptsFactCitedNeutralParaphrase(t *testing.T) {
+	bundle := turn.FactBundle{Facts: []game.Fact{
+		{ID: "f001", Kind: game.FactRoomDescription, Subject: "reception", Value: "A damaged reception area. The ceiling has split above the front desk.", Text: "A damaged reception area. The ceiling has split above the front desk.", Required: true},
+		{ID: "f002", Kind: game.FactVisibleObjects, Subject: "reception", Value: "Reception Desk, Reception Floor, Collapsed Chair", Text: "I can see: Reception Desk, Reception Floor, Collapsed Chair.", Required: true},
+		{ID: "f003", Kind: game.FactKnownExits, Subject: "reception", Value: "east", Text: "I can go: east.", Required: true},
+		{ID: "f004", Kind: game.FactElapsedTime, Subject: "time", Value: "5", Text: "5 seconds pass.", Required: true},
+	}}
+	gen := &fakeGenerator{raw: `{"sentences":[{"factIds":["f001"],"text":"I see a damaged reception area with the ceiling split above the front desk."},{"factIds":["f002"],"text":"My view includes the Reception Desk, Reception Floor, and Collapsed Chair."},{"factIds":["f003"],"text":"The only exit I can access is east."},{"factIds":["f004"],"text":"Five seconds have passed since my observation began."}]}`}
+	got := NewComposer(gen).Compose(context.Background(), bundle)
+	if got.UsedFallback {
+		t.Fatalf("response = %#v, want accepted fact-cited neutral paraphrase", got)
+	}
+}
+
 func TestComposerRejectsUnsupportedLowercaseClaim(t *testing.T) {
 	gen := &fakeGenerator{raw: `{"sentences":[{"factIds":["f001","f002"],"text":"A monster is here. The doctor is dead."}]}`}
 	got := NewComposer(gen).Compose(context.Background(), doctorBundle())
