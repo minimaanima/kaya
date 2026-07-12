@@ -43,6 +43,31 @@ func TestCheckResponseRejectsPitchBlackRoomAwarenessLeak(t *testing.T) {
 	assertResponseViolation(t, violations, "response_darkness_leak")
 }
 
+func TestCheckResponseRejectsCompoundMoveThenInspectPitchBlackLeaks(t *testing.T) {
+	for _, text := range []string{
+		"I can see the Storage Cabinet.",
+		"I can go north.",
+	} {
+		t.Run(text, func(t *testing.T) {
+			state, step := compoundResponseStep(t, []turn.ActionOutcome{
+				{Intent: intent.Intent{Action: intent.ActionMove, Direction: "east"}, Result: game.ActionResult{Status: game.ActionSucceeded, Outcome: "moved"}},
+				{Intent: intent.Intent{Action: intent.ActionInspect}, Result: game.ActionResult{Status: game.ActionSucceeded, Outcome: "inspected_room"}},
+			}, response.Response{Text: text})
+			assertResponseViolation(t, CheckResponse(step, state), "response_darkness_leak")
+		})
+	}
+}
+
+func TestCheckResponseDoesNotApplyPostMoveDarknessToEarlierReceptionAwareness(t *testing.T) {
+	state, step := compoundResponseStep(t, []turn.ActionOutcome{
+		{Intent: intent.Intent{Action: intent.ActionInspect}, Result: game.ActionResult{Status: game.ActionSucceeded, Outcome: "inspected_room"}},
+		{Intent: intent.Intent{Action: intent.ActionMove, Direction: "east"}, Result: game.ActionResult{Status: game.ActionSucceeded, Outcome: "moved"}},
+	}, response.Response{Text: "I can see the Reception Desk, then move east into Storage Room."})
+	if violations := CheckResponse(step, state); hasViolation(violations, "response_darkness_leak") {
+		t.Fatalf("earlier reception awareness inherited post-move darkness: %#v", violations)
+	}
+}
+
 func TestCheckResponseDoesNotTreatOrdinaryProseAsHiddenDirection(t *testing.T) {
 	state := scenario.NewPrototypeWorld()
 	state.CurrentRoomID = scenario.RoomStorage
@@ -98,6 +123,26 @@ func responseStep(state *world.State, result turn.Result, reply response.Respons
 		After:  snapshot,
 		Turn: session.ProcessedTurn{
 			Result:   result,
+			Response: reply,
+		},
+	}
+}
+
+func compoundResponseStep(t *testing.T, outcomes []turn.ActionOutcome, reply response.Response) (*world.State, Step) {
+	t.Helper()
+	beforeState := scenario.NewPrototypeWorld()
+	afterState := scenario.NewPrototypeWorld()
+	afterState.CurrentRoomID = scenario.RoomStorage
+	afterState.PreviousRoomID = scenario.RoomReception
+	if err := afterState.ObserveRoom(scenario.RoomStorage, scenario.RoomReception); err != nil {
+		t.Fatal(err)
+	}
+	return afterState, Step{
+		Player: "go east and look around",
+		Before: Capture(beforeState),
+		After:  Capture(afterState),
+		Turn: session.ProcessedTurn{
+			Result:   turn.Result{Outcomes: outcomes},
 			Response: reply,
 		},
 	}

@@ -76,27 +76,80 @@ func isClarificationTurn(result turn.Result) bool {
 }
 
 func leaksPitchBlackRoomAwareness(step Step, state *world.State, text string) bool {
-	if state == nil || step.Before.ActiveLight || step.After.ActiveLight || !isRoomAwarenessTurn(step.Turn.Result) {
+	if state == nil {
 		return false
 	}
-	room, ok := state.Rooms[step.Before.CurrentRoom]
+	location := outcomeLocation{
+		room:     step.Before.CurrentRoom,
+		previous: step.Before.PreviousRoom,
+		light:    step.Before.ActiveLight,
+	}
+	for _, outcome := range step.Turn.Result.Outcomes {
+		if isRoomAwarenessOutcome(outcome) && leaksPitchBlackRoomTerms(state, location.room, location.light, text) {
+			return true
+		}
+		location.advance(state, outcome)
+	}
+	return false
+}
+
+type outcomeLocation struct {
+	room, previous game.RoomID
+	light          bool
+}
+
+func (location *outcomeLocation) advance(state *world.State, outcome turn.ActionOutcome) {
+	if outcome.Result.Outcome == "moved" {
+		if next, ok := movedRoom(state, location.room, location.previous, outcome.Intent); ok {
+			location.previous, location.room = location.room, next
+		}
+	}
+	switch outcome.Result.Outcome {
+	case "flashlight_on":
+		location.light = true
+	case "flashlight_off":
+		location.light = false
+	}
+}
+
+func movedRoom(state *world.State, current, previous game.RoomID, in intent.Intent) (game.RoomID, bool) {
+	room, ok := state.Rooms[current]
+	if !ok {
+		return "", false
+	}
+	direction := strings.TrimSpace(in.Direction)
+	if direction == "" {
+		direction = strings.TrimSpace(in.Target)
+	}
+	if world.MatchesTarget(direction, "back", []string{"backward", "previous room", "where you came from"}) && previous != "" {
+		for _, exit := range room.Exits {
+			if exit.To == previous {
+				return exit.To, true
+			}
+		}
+	}
+	for _, exit := range room.Exits {
+		if world.MatchesTarget(direction, exit.Direction, nil) {
+			return exit.To, true
+		}
+	}
+	return "", false
+}
+
+func isRoomAwarenessOutcome(outcome turn.ActionOutcome) bool {
+	return (outcome.Intent.Action == intent.ActionInspect && strings.TrimSpace(outcome.Intent.Target) == "") || outcome.Result.Outcome == "inspected_room"
+}
+
+func leaksPitchBlackRoomTerms(state *world.State, roomID game.RoomID, activeLight bool, text string) bool {
+	if activeLight {
+		return false
+	}
+	room, ok := state.Rooms[roomID]
 	if !ok || room.Visibility != world.VisibilityPitchBlack {
 		return false
 	}
 	for _, hiddenName := range hiddenRoomNamesAndDirections(state, room) {
 		if containsNormalizedName(text, hiddenName) {
-			return true
-		}
-	}
-	return false
-}
-
-func isRoomAwarenessTurn(result turn.Result) bool {
-	for _, outcome := range result.Outcomes {
-		if outcome.Intent.Action == intent.ActionInspect && strings.TrimSpace(outcome.Intent.Target) == "" {
-			return true
-		}
-		if outcome.Result.Outcome == "inspected_room" {
 			return true
 		}
 	}
