@@ -16,8 +16,11 @@ import (
 
 func TestPrototypeThousandPhraseVariedSessionsReachObjective(t *testing.T) {
 	placementsSeen := map[string]bool{}
+	phrases := PrototypePhrases()
+	unlockSeen := map[string]bool{}
+	unlockSucceeded := map[string]bool{}
 	for seed := int64(1); seed <= 1000; seed++ {
-		run := mustGeneratedRun(t, seed)
+		run := prototypeGeneratedRun(t, seed)
 		placementsSeen[placementKey(run.Placements)] = true
 		runner := NewRunner(runscenario.PrototypeDefinition(), run, fallbackParser{}, fallbackComposer{})
 		messages, err := PrototypeWinningMessages(run, seed)
@@ -25,8 +28,19 @@ func TestPrototypeThousandPhraseVariedSessionsReachObjective(t *testing.T) {
 			t.Fatalf("seed %d placements=%#v: %v", seed, run.Placements, err)
 		}
 		for _, message := range messages {
-			if _, err := runner.Step(context.Background(), message); err != nil {
+			step, err := runner.Step(context.Background(), message)
+			if err != nil {
 				t.Fatalf("seed %d placements=%#v message %q: %v\nsession=%#v", seed, run.Placements, message, err, runner.Session())
+			}
+			for _, phrase := range phrases.unlock {
+				if message != phrase {
+					continue
+				}
+				unlockSeen[phrase] = true
+				if len(step.Turn.Result.Outcomes) != 1 || step.Turn.Result.Outcomes[0].Result.Outcome != "door_unlocked" {
+					t.Fatalf("seed %d placements=%#v unlock %q did not execute successfully\nstep=%#v\nsession=%#v", seed, run.Placements, message, step, runner.Session())
+				}
+				unlockSucceeded[phrase] = true
 			}
 		}
 		got := runner.Session()
@@ -38,18 +52,21 @@ func TestPrototypeThousandPhraseVariedSessionsReachObjective(t *testing.T) {
 	if !reflect.DeepEqual(placementsSeen, wantPlacements) {
 		t.Fatalf("placement combinations = %s, want %s", fmt.Sprint(placementsSeen), fmt.Sprint(wantPlacements))
 	}
+	wantUnlocks := map[string]bool{
+		"use the key on the emergency stairwell door": true,
+		"try the key on the stairwell door":           true,
+	}
+	if !reflect.DeepEqual(unlockSeen, wantUnlocks) || !reflect.DeepEqual(unlockSucceeded, wantUnlocks) {
+		t.Fatalf("unlock variants seen=%s succeeded=%s, want=%s", fmt.Sprint(unlockSeen), fmt.Sprint(unlockSucceeded), fmt.Sprint(wantUnlocks))
+	}
 }
 
-func TestPrototypeWinningMessagesUseFallbackExecutableUnlockPhrase(t *testing.T) {
-	run := mustGeneratedRun(t, 2)
-	messages, err := PrototypeWinningMessages(run, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, message := range messages {
-		if strings.Contains(message, "try the key on the stairwell door") {
-			t.Fatalf("messages contain fallback-incompatible unlock phrase: %#v", messages)
-		}
+func TestPrototypePhrasesReturnsIndependentCopy(t *testing.T) {
+	first := PrototypePhrases()
+	first.unlock[0] = "mutated"
+	second := PrototypePhrases()
+	if second.unlock[0] == "mutated" {
+		t.Fatalf("prototype phrase accessor exposes canonical data: %#v", second)
 	}
 }
 
@@ -100,7 +117,7 @@ func TestRunPrototypeSessionPreservesAndExecutesQuarterSeedCompoundTurns(t *test
 
 func TestPrototypeWinningMessagesAreDeterministicAndDoNotMutatePhraseBank(t *testing.T) {
 	run := mustGeneratedRun(t, 47)
-	before := clonePhraseBank(PrototypePhrases)
+	before := PrototypePhrases()
 	first, err := PrototypeWinningMessages(run, 47)
 	if err != nil {
 		t.Fatal(err)
@@ -112,8 +129,8 @@ func TestPrototypeWinningMessagesAreDeterministicAndDoNotMutatePhraseBank(t *tes
 	if !reflect.DeepEqual(first, second) {
 		t.Fatalf("messages differ for the same generated run and seed: first=%#v second=%#v", first, second)
 	}
-	if !reflect.DeepEqual(PrototypePhrases, before) {
-		t.Fatalf("phrase bank mutated: before=%#v after=%#v", before, PrototypePhrases)
+	if after := PrototypePhrases(); !reflect.DeepEqual(after, before) {
+		t.Fatalf("phrase bank mutated: before=%#v after=%#v", before, after)
 	}
 }
 
@@ -128,25 +145,24 @@ func prototypeCompoundStep(t *testing.T, session Session) Step {
 	return Step{}
 }
 
-func clonePhraseBank(source PhraseBank) PhraseBank {
-	return PhraseBank{
-		Awareness:      append([]string(nil), source.Awareness...),
-		Search:         append([]string(nil), source.Search...),
-		TakeFlashlight: append([]string(nil), source.TakeFlashlight...),
-		MoveEast:       append([]string(nil), source.MoveEast...),
-		LightOn:        append([]string(nil), source.LightOn...),
-		TakeKey:        append([]string(nil), source.TakeKey...),
-		Unlock:         append([]string(nil), source.Unlock...),
-		MoveNorth:      append([]string(nil), source.MoveNorth...),
-	}
-}
-
 func placementKey(placements []rungen.Placement) string {
 	objects := make(map[game.ItemID]game.ObjectID, len(placements))
 	for _, placement := range placements {
 		objects[placement.ItemID] = placement.ObjectID
 	}
 	return fmt.Sprintf("flashlight=%s,key=%s", objects[scenario.ItemFlashlight], objects[scenario.ItemBrassKey])
+}
+
+func prototypeGeneratedRun(t *testing.T, seed int64) rungen.GeneratedRun {
+	t.Helper()
+	run, err := rungen.Generate(
+		rungen.RunConfig{Seed: seed, GeneratorVersion: rungen.CurrentGeneratorVersion},
+		runscenario.PrototypeDefinition(),
+	)
+	if err != nil {
+		t.Fatalf("seed %d: generate prototype run: %v", seed, err)
+	}
+	return run
 }
 
 func prototypePlacementKeys() map[string]bool {

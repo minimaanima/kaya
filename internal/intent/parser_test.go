@@ -149,6 +149,22 @@ func TestFallbackPlanExtractsObjectTargets(t *testing.T) {
 	}
 }
 
+func TestFallbackPlanParsesTryKeyOnDoorAsUseItem(t *testing.T) {
+	supported := FallbackPlan("use the key on the emergency stairwell door")
+	attempt := FallbackPlan("try the key on the stairwell door")
+	if len(supported.Actions) != 1 || len(attempt.Actions) != 1 {
+		t.Fatalf("supported=%#v attempt=%#v", supported, attempt)
+	}
+	want := supported.Actions[0]
+	got := attempt.Actions[0]
+	if got.Intent.Action != want.Intent.Action || got.Intent.Item != want.Intent.Item || got.Intent.Target != "stairwell door" || got.TargetMode != want.TargetMode {
+		t.Fatalf("attempt action=%#v, want use-item target relationship from %#v", got, want)
+	}
+	if attempt.NeedsClarification {
+		t.Fatalf("attempt needs clarification: %#v", attempt)
+	}
+}
+
 func TestFallbackPlanRoutesNaturalQuestions(t *testing.T) {
 	tests := []struct {
 		message string

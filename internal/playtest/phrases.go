@@ -1,25 +1,42 @@
 package playtest
 
 type PhraseBank struct {
-	Awareness      []string
-	Search         []string
-	TakeFlashlight []string
-	MoveEast       []string
-	LightOn        []string
-	TakeKey        []string
-	Unlock         []string
-	MoveNorth      []string
+	awareness      []string
+	search         []string
+	takeFlashlight []string
+	moveEast       []string
+	lightOn        []string
+	takeKey        []string
+	unlock         []string
+	moveNorth      []string
 }
 
-var PrototypePhrases = PhraseBank{
-	Awareness:      []string{"look around", "what do you see", "whats around you", "is there anything around you"},
-	Search:         []string{"search the %s", "check the %s", "look inside the %s"},
-	TakeFlashlight: []string{"take the flashlight", "grab the flashlight", "pick up the flashlight", "took the flashlight"},
-	MoveEast:       []string{"go east", "move east", "head east", "walk east"},
-	LightOn:        []string{"turn on the flashlight", "switch on the torch", "activate the light"},
-	TakeKey:        []string{"take the key", "grab the brass key", "pick up the key", "took the key"},
-	Unlock:         []string{"use the key on the emergency stairwell door", "try the key on the stairwell door"},
-	MoveNorth:      []string{"go north", "move north", "head north"},
+var prototypePhrases = PhraseBank{
+	awareness:      []string{"look around", "what do you see", "whats around you", "is there anything around you"},
+	search:         []string{"search the %s", "check the %s", "look inside the %s"},
+	takeFlashlight: []string{"take the flashlight", "grab the flashlight", "pick up the flashlight", "took the flashlight"},
+	moveEast:       []string{"go east", "move east", "head east", "walk east"},
+	lightOn:        []string{"turn on the flashlight", "switch on the torch", "activate the light"},
+	takeKey:        []string{"take the key", "grab the brass key", "pick up the key", "took the key"},
+	unlock:         []string{"use the key on the emergency stairwell door", "try the key on the stairwell door"},
+	moveNorth:      []string{"go north", "move north", "head north"},
+}
+
+func PrototypePhrases() PhraseBank {
+	return clonePhraseBank(prototypePhrases)
+}
+
+func clonePhraseBank(source PhraseBank) PhraseBank {
+	return PhraseBank{
+		awareness:      append([]string(nil), source.awareness...),
+		search:         append([]string(nil), source.search...),
+		takeFlashlight: append([]string(nil), source.takeFlashlight...),
+		moveEast:       append([]string(nil), source.moveEast...),
+		lightOn:        append([]string(nil), source.lightOn...),
+		takeKey:        append([]string(nil), source.takeKey...),
+		unlock:         append([]string(nil), source.unlock...),
+		moveNorth:      append([]string(nil), source.moveNorth...),
+	}
 }
 
 type splitMix64 struct {

@@ -64,7 +64,7 @@ func fallbackSinglePlan(message string) TurnPlan {
 	case strings.Contains(low, "throw"):
 		intent.Item, intent.Target = extractThrowParts(message)
 		intent.Action, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionThrow, 0.8, false, ""
-	case strings.Contains(low, "use") && strings.Contains(low, " on "):
+	case isUseItemMessage(low):
 		intent.Item, intent.Target = extractUseItemParts(message)
 		intent.Action, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionUseItem, 0.8, false, ""
 	case isSearchMessage(low):
@@ -296,15 +296,24 @@ func extractThrowParts(message string) (item string, target string) {
 func extractUseItemParts(message string) (item string, target string) {
 	low := normalizePlayerText(message)
 	index := findCue(low, "use")
+	verb := "use"
+	if index < 0 {
+		index = findCue(low, "try")
+		verb = "try"
+	}
 	if index < 0 {
 		return "", ""
 	}
-	rest := strings.TrimSpace(low[index+len("use"):])
+	rest := strings.TrimSpace(low[index+len(verb):])
 	split := strings.Index(rest, " on ")
 	if split < 0 {
 		return "", ""
 	}
 	return cleanTargetPrefix(rest[:split]), cleanTargetPrefix(rest[split+len(" on "):])
+}
+
+func isUseItemMessage(message string) bool {
+	return (findCue(message, "use") >= 0 || strings.HasPrefix(message, "try ")) && strings.Contains(message, " on ")
 }
 
 func isLifeStatusSearch(message string) bool {

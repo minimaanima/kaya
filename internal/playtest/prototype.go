@@ -3,7 +3,6 @@ package playtest
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"kaya/internal/game"
 	"kaya/internal/rungen"
@@ -28,21 +27,18 @@ func PrototypeWinningMessages(run rungen.GeneratedRun, seed int64) ([]string, er
 	}
 
 	selector := newSplitMix64(seed)
-	unlock, err := fallbackExecutableUnlockPhrase(PrototypePhrases.Unlock)
-	if err != nil {
-		return nil, err
-	}
+	phrases := PrototypePhrases()
 	messages := []string{
-		selector.phrase(PrototypePhrases.Awareness),
-		fmt.Sprintf(selector.phrase(PrototypePhrases.Search), flashlightObject.Name),
-		selector.phrase(PrototypePhrases.TakeFlashlight),
-		selector.phrase(PrototypePhrases.MoveEast),
-		selector.phrase(PrototypePhrases.LightOn),
-		selector.phrase(PrototypePhrases.Awareness),
-		fmt.Sprintf(selector.phrase(PrototypePhrases.Search), keyObject.Name),
-		selector.phrase(PrototypePhrases.TakeKey),
-		unlock,
-		selector.phrase(PrototypePhrases.MoveNorth),
+		selector.phrase(phrases.awareness),
+		fmt.Sprintf(selector.phrase(phrases.search), flashlightObject.Name),
+		selector.phrase(phrases.takeFlashlight),
+		selector.phrase(phrases.moveEast),
+		selector.phrase(phrases.lightOn),
+		selector.phrase(phrases.awareness),
+		fmt.Sprintf(selector.phrase(phrases.search), keyObject.Name),
+		selector.phrase(phrases.takeKey),
+		selector.phrase(phrases.unlock),
+		selector.phrase(phrases.moveNorth),
 	}
 
 	switch uint64(seed) % 4 {
@@ -73,15 +69,6 @@ func RunPrototypeSession(ctx context.Context, runner *Runner, run rungen.Generat
 		}
 	}
 	return nil
-}
-
-func fallbackExecutableUnlockPhrase(phrases []string) (string, error) {
-	for _, phrase := range phrases {
-		if strings.HasPrefix(phrase, "use ") {
-			return phrase, nil
-		}
-	}
-	return "", fmt.Errorf("phrase bank has no fallback-executable unlock phrase")
 }
 
 func prototypePlacements(placements []rungen.Placement) (rungen.Placement, rungen.Placement, error) {
