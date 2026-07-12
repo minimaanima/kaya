@@ -2,8 +2,10 @@ package response
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -74,6 +76,22 @@ func TestComposerAcceptsFactCitedNeutralParaphrase(t *testing.T) {
 	}
 }
 
+func TestComposerAcceptsCitedNumberWordEquivalent(t *testing.T) {
+	bundle := turn.FactBundle{Facts: []game.Fact{{
+		ID:       "f001",
+		Kind:     game.FactElapsedTime,
+		Subject:  "time",
+		Value:    "35",
+		Text:     "35 seconds pass.",
+		Required: true,
+	}}}
+	gen := &fakeGenerator{raw: `{"sentences":[{"factIds":["f001"],"text":"Thirty-five seconds pass."}]}`}
+	got := NewComposer(gen).Compose(context.Background(), bundle)
+	if got.UsedFallback {
+		t.Fatalf("response = %#v, want accepted number-word equivalent", got)
+	}
+}
+
 func TestComposerRejectsUnsupportedLowercaseClaim(t *testing.T) {
 	gen := &fakeGenerator{raw: `{"sentences":[{"factIds":["f001","f002"],"text":"A monster is here. The doctor is dead."}]}`}
 	got := NewComposer(gen).Compose(context.Background(), doctorBundle())
@@ -122,6 +140,72 @@ func TestComposerFallsBackOnGeneratorError(t *testing.T) {
 	}
 }
 
+func TestComposerRepairsInvalidDraftIntoFactLockedResponse(t *testing.T) {
+	invalid := `{"sentences":[{"factIds":["f001","f002"],"text":"I searched Doctor Near Cabinet while I hold it steady and my eyes adjust to the dark. The doctor is dead."}]}`
+	valid := `{"sentences":[{"factIds":["f001","f002"],"text":"I searched Doctor Near Cabinet. The doctor is dead."}]}`
+	gen := &sequenceGenerator{responses: []generatedResponse{{raw: invalid}, {raw: valid}}}
+
+	got := NewComposer(gen).Compose(context.Background(), doctorBundle())
+	if got.UsedFallback || !got.RepairAttempted || !got.RepairSucceeded || got.InitialValidationReason != "unsupported_claim" || got.RepairValidationReason != "" || got.RepairGenerationError != "" {
+		t.Fatalf("response provenance = %#v", got)
+	}
+	if want := []game.FactID{"f001", "f002"}; !reflect.DeepEqual(got.UsedFactIDs, want) {
+		t.Fatalf("used fact IDs = %#v, want %#v", got.UsedFactIDs, want)
+	}
+	if len(gen.calls) != 2 || gen.calls[0].systemPrompt != SystemPrompt || gen.calls[1].systemPrompt != RepairSystemPrompt {
+		t.Fatalf("generator calls = %#v", gen.calls)
+	}
+	var repairInput struct {
+		OriginalDraft    string `json:"originalDraft"`
+		ValidationReason string `json:"validationReason"`
+	}
+	if err := json.Unmarshal([]byte(gen.calls[1].userPrompt), &repairInput); err != nil {
+		t.Fatalf("decode repair input: %v", err)
+	}
+	if repairInput.ValidationReason != "unsupported_claim" || repairInput.OriginalDraft != invalid {
+		t.Fatalf("repair input = %#v", repairInput)
+	}
+}
+
+func TestComposerFallsBackWhenRepairDraftRemainsInvalid(t *testing.T) {
+	invalid := `{"sentences":[{"factIds":["f001","f002"],"text":"I searched Doctor Near Cabinet while I hold it steady. The doctor is dead."}]}`
+	gen := &sequenceGenerator{responses: []generatedResponse{{raw: invalid}, {raw: invalid}}}
+
+	got := NewComposer(gen).Compose(context.Background(), doctorBundle())
+	if !got.UsedFallback || got.FallbackReason != "unsupported_claim" || !got.RepairAttempted || got.RepairSucceeded || got.InitialValidationReason != "unsupported_claim" || got.RepairValidationReason != "unsupported_claim" || got.RepairGenerationError != "" {
+		t.Fatalf("response provenance = %#v", got)
+	}
+	if len(gen.calls) != 2 {
+		t.Fatalf("generator calls = %#v, want two calls", gen.calls)
+	}
+}
+
+func TestComposerFallsBackWhenRepairGenerationFails(t *testing.T) {
+	invalid := `{"sentences":[{"factIds":["f001","f002"],"text":"I searched Doctor Near Cabinet while I hold it steady. The doctor is dead."}]}`
+	gen := &sequenceGenerator{responses: []generatedResponse{{raw: invalid}, {err: errors.New("offline")}}}
+
+	got := NewComposer(gen).Compose(context.Background(), doctorBundle())
+	if !got.UsedFallback || got.FallbackReason != "unsupported_claim" || !got.RepairAttempted || got.RepairSucceeded || got.InitialValidationReason != "unsupported_claim" || got.RepairValidationReason != "" || got.RepairGenerationError != "generate repaired response: offline" {
+		t.Fatalf("response provenance = %#v", got)
+	}
+	if len(gen.calls) != 2 {
+		t.Fatalf("generator calls = %#v, want two calls", gen.calls)
+	}
+}
+
+func TestComposerKeepsValidFirstDraftWithoutRepair(t *testing.T) {
+	valid := `{"sentences":[{"factIds":["f001","f002"],"text":"I searched Doctor Near Cabinet. The doctor is dead."}]}`
+	gen := &sequenceGenerator{responses: []generatedResponse{{raw: valid}}}
+
+	got := NewComposer(gen).Compose(context.Background(), doctorBundle())
+	if got.UsedFallback || got.RepairAttempted || got.RepairSucceeded || got.InitialValidationReason != "" || got.RepairValidationReason != "" || got.RepairGenerationError != "" {
+		t.Fatalf("response provenance = %#v", got)
+	}
+	if len(gen.calls) != 1 {
+		t.Fatalf("generator calls = %#v, want one call", gen.calls)
+	}
+}
+
 func TestComposerRejectsStrictDraftViolations(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -158,6 +242,27 @@ type fakeGenerator struct {
 
 func (f *fakeGenerator) GenerateJSON(context.Context, string, string, any) (string, error) {
 	return f.raw, f.err
+}
+
+type generatedResponse struct {
+	raw string
+	err error
+}
+
+type generatorCall struct {
+	systemPrompt string
+	userPrompt   string
+}
+
+type sequenceGenerator struct {
+	responses []generatedResponse
+	calls     []generatorCall
+}
+
+func (g *sequenceGenerator) GenerateJSON(_ context.Context, systemPrompt, userPrompt string, _ any) (string, error) {
+	g.calls = append(g.calls, generatorCall{systemPrompt: systemPrompt, userPrompt: userPrompt})
+	response := g.responses[len(g.calls)-1]
+	return response.raw, response.err
 }
 
 func doctorBundle() turn.FactBundle {

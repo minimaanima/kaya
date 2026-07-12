@@ -3,6 +3,7 @@ package response
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"kaya/internal/game"
@@ -37,8 +38,42 @@ func (c Composer) Compose(ctx context.Context, bundle turn.FactBundle) Response 
 	}
 	draft, reason := validateDraft(raw, bundle)
 	if reason != "" {
-		return Response{Text: fallback, UsedFallback: true, FallbackReason: reason}
+		return c.repairInvalidDraft(ctx, bundle, fallback, raw, reason)
 	}
+	return responseFromDraft(draft)
+}
+
+func (c Composer) repairInvalidDraft(ctx context.Context, bundle turn.FactBundle, fallback, originalDraft, initialReason string) Response {
+	response := Response{
+		Text:                    fallback,
+		UsedFallback:            true,
+		FallbackReason:          initialReason,
+		RepairAttempted:         true,
+		InitialValidationReason: initialReason,
+	}
+	payload, err := json.Marshal(responseRepairInput(bundle, originalDraft, initialReason))
+	if err != nil {
+		response.RepairGenerationError = fmt.Sprintf("encode repaired response input: %v", err)
+		return response
+	}
+	repairedRaw, err := c.generator.GenerateJSON(ctx, RepairSystemPrompt, string(payload), ResponseSchema)
+	if err != nil {
+		response.RepairGenerationError = fmt.Sprintf("generate repaired response: %v", err)
+		return response
+	}
+	repaired, reason := validateDraft(repairedRaw, bundle)
+	if reason != "" {
+		response.RepairValidationReason = reason
+		return response
+	}
+	response = responseFromDraft(repaired)
+	response.RepairAttempted = true
+	response.RepairSucceeded = true
+	response.InitialValidationReason = initialReason
+	return response
+}
+
+func responseFromDraft(draft ResponseDraft) Response {
 	parts := make([]string, len(draft.Sentences))
 	used := make([]game.FactID, 0)
 	seen := make(map[game.FactID]bool)

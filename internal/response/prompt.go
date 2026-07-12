@@ -8,6 +8,8 @@ import (
 
 const SystemPrompt = `Write concise first-person dialogue as Dr. Kaya. Preserve action order. Every sentence must cite its supporting fact IDs. Include every required fact. Use only named entities present in the supplied facts. Add no room, exit, item, creature, injury, event, or outcome.`
 
+const RepairSystemPrompt = `Repair one response draft into JSON matching the supplied schema. Use only the supplied facts and fact IDs. Remove unsupported claims while preserving every required fact. Return JSON only.`
+
 type ResponseDraft struct {
 	Sentences []DraftSentence `json:"sentences"`
 }
@@ -41,4 +43,12 @@ func responseInput(bundle turn.FactBundle) any {
 		Facts         []game.Fact  `json:"facts"`
 		Emotion       kaya.Emotion `json:"emotion"`
 	}{bundle.PlayerMessage, bundle.Facts, bundle.Emotion}
+}
+
+func responseRepairInput(bundle turn.FactBundle, originalDraft, validationReason string) any {
+	return struct {
+		Facts            []game.Fact `json:"facts"`
+		OriginalDraft    string      `json:"originalDraft"`
+		ValidationReason string      `json:"validationReason"`
+	}{bundle.Facts, originalDraft, validationReason}
 }

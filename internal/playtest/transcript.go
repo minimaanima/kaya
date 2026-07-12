@@ -227,6 +227,8 @@ func writeResponse(b *strings.Builder, step Step) {
 	writeFencedSection(b, "Response text", response.Text)
 	b.WriteString("Response metadata:\n")
 	fmt.Fprintf(b, "- Fallback flag: `%t`\n", response.UsedFallback)
+	fmt.Fprintf(b, "- Repair attempted: `%t`\n", response.RepairAttempted)
+	fmt.Fprintf(b, "- Repair succeeded: `%t`\n", response.RepairSucceeded)
 	ids := append([]game.FactID(nil), response.UsedFactIDs...)
 	if len(ids) == 0 {
 		b.WriteString("- Used fact IDs: none\n\n")
@@ -239,6 +241,15 @@ func writeResponse(b *strings.Builder, step Step) {
 	}
 	if strings.TrimSpace(response.FallbackReason) != "" {
 		writeFencedSection(b, "Fallback reason", response.FallbackReason)
+	}
+	if strings.TrimSpace(response.InitialValidationReason) != "" {
+		writeFencedSection(b, "Initial validation reason", response.InitialValidationReason)
+	}
+	if strings.TrimSpace(response.RepairValidationReason) != "" {
+		writeFencedSection(b, "Repair validation reason", response.RepairValidationReason)
+	}
+	if strings.TrimSpace(response.RepairGenerationError) != "" {
+		writeFencedSection(b, "Repair generation error", response.RepairGenerationError)
 	}
 }
 

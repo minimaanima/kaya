@@ -212,3 +212,44 @@ Tracked certification changes:
 - `docs/engine-milestones.md`
 
 Untracked task evidence: `.superpowers/sdd/task-6-report.md`.
+
+## Response Repair Update
+
+Task 6 was resumed from blocked-state commit `7fe2891` with one model-agnostic response validate-and-repair attempt. The validator remains authoritative: the initial and repaired drafts both pass through `validateDraft`, and a failed repair still returns deterministic fallback.
+
+New RED/GREEN regressions:
+
+- `TestComposerAcceptsCitedNumberWordEquivalent` was RED for `Thirty-five seconds pass.` against an approved `35` elapsed-time fact and GREEN after generic cardinal-number equivalence was added. The old ungrounded-prose rejections remain covered by the repair tests.
+- `TestComposerRepairsInvalidDraftIntoFactLockedResponse`, `TestComposerFallsBackWhenRepairDraftRemainsInvalid`, `TestComposerFallsBackWhenRepairGenerationFails`, and `TestComposerKeepsValidFirstDraftWithoutRepair` were RED for the missing repair contract and GREEN with exactly one repair call, exact-fact repair input, and explicit provenance.
+- `TestRenderMarkdownIncludesReproductionEvidence` was RED for missing response repair provenance and GREEN after the transcript renders attempt/success plus initial/repair reasons and repair generation errors.
+- `TestLiveProvenanceSummaryCountsResponseRepairs` was RED for missing repair counters and GREEN after the live summary logs response repair attempts and successes.
+
+Offline verification after the repair update:
+
+```powershell
+go test ./internal/playtest -run 'Test(AdversarialPrototypeSessions|PrototypeThousandPhraseVariedSessionsReachObjective)' -v -count=1
+go test ./... -count=1
+```
+
+PASS: all six adversarial subtests, the 1,000-session proof in `0.45s`, and the full 15-package suite. The default live gate also PASSed by skipping before client construction.
+
+The final combined live command remained BLOCKED after `1m20.3245446s`:
+
+```powershell
+$env:KAYA_LIVE_SLICE_TESTS = '1'
+go test ./internal/playtest -run TestOllamaPrototypeCompletePlaythroughs -v -count=1
+```
+
+| Seed | Response repair provenance | Exact strict failure |
+| --- | --- | --- |
+| 10 | 4 attempts, 3 successes, 1 fallback; 6 generated parser turns, parser fallback/errors 0/0 | At storage awareness, initial `unsupported_claim`; repaired draft omitted a required fact and failed `missing_required_fact`. |
+| 11 | 4 attempts, 3 successes, 1 fallback; 6 generated parser turns, parser fallback/errors 0/0 | Same storage-awareness repair failure: initial `unsupported_claim`; repair `missing_required_fact`. |
+| 12 | 1 attempt, 0 successes, 1 fallback; 3 generated parser turns, parser fallback/errors 0/0 | On `pick up the flashlight then move east`, initial `missing_required_fact`; repaired draft added unsupported prose and failed `unsupported_claim`. |
+
+Seed 10 and 11 repair draft excerpt, retained in the failing transcript:
+
+```json
+{"sentences":[{"factIds":["f001"],"text":"I stand in a pitch-black storage room with overturned cabinets and a chemical smell."},{"factIds":["f002","f003"],"text":"Doctor Near Cabinet, Doctor Near Door, Storage Cabinet surround me. I can go west or north."}]}
+```
+
+Seed 12 repair draft retained its required-fact schema but added uncited wording including `before I move east`, `fills my view`, and `while I feel uneasy`; strict validation rejected it. Every live failure printed the complete Markdown transcript with response repair provenance. Phase 8 remains BLOCKED.

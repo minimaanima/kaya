@@ -13,6 +13,7 @@ import (
 	"kaya/internal/rungen"
 	"kaya/internal/runscenario"
 	"kaya/internal/scenario"
+	"kaya/internal/session"
 )
 
 func TestLiveSliceEnabledRecognizesTruthyValues(t *testing.T) {
@@ -32,6 +33,21 @@ func TestLiveSliceEnabledRecognizesTruthyValues(t *testing.T) {
 				t.Fatalf("KAYA_LIVE_SLICE_TESTS=%q unexpectedly enabled live certification", value)
 			}
 		})
+	}
+}
+
+func TestLiveProvenanceSummaryCountsResponseRepairs(t *testing.T) {
+	summary := liveProvenanceSummary{}
+	summary.record(Step{Turn: session.ProcessedTurn{
+		Provenance: intent.ParseProvenance{Source: intent.ParseSourceModel, HasRawPlan: true},
+		Response: response.Response{
+			RepairAttempted: true,
+			RepairSucceeded: true,
+		},
+	}}, "repaired response")
+
+	if summary.ResponseRepairAttempts != 1 || summary.ResponseRepairSuccesses != 1 || summary.ResponseFallbacks != 0 || summary.ResponseGenerated != 1 {
+		t.Fatalf("live provenance = %#v", summary)
 	}
 }
 
@@ -108,17 +124,19 @@ func liveEnvOrDefault(name, fallback string) string {
 }
 
 type liveProvenanceSummary struct {
-	Turns             int
-	GeneratorUsed     int
-	Repaired          int
-	Canonicalized     int
-	RawPlans          int
-	ResolvedPlans     int
-	ParseFallbacks    int
-	FallbackErrors    int
-	ResponseGenerated int
-	ResponseFallbacks int
-	LastResponseRaw   string
+	Turns                   int
+	GeneratorUsed           int
+	Repaired                int
+	Canonicalized           int
+	RawPlans                int
+	ResolvedPlans           int
+	ParseFallbacks          int
+	FallbackErrors          int
+	ResponseGenerated       int
+	ResponseFallbacks       int
+	ResponseRepairAttempts  int
+	ResponseRepairSuccesses int
+	LastResponseRaw         string
 }
 
 func (s *liveProvenanceSummary) record(step Step, responseRaw string) {
@@ -142,6 +160,12 @@ func (s *liveProvenanceSummary) record(step Step, responseRaw string) {
 	}
 	if provenance.FallbackError != nil {
 		s.FallbackErrors++
+	}
+	if step.Turn.Response.RepairAttempted {
+		s.ResponseRepairAttempts++
+	}
+	if step.Turn.Response.RepairSucceeded {
+		s.ResponseRepairSuccesses++
 	}
 	if step.Turn.Response.UsedFallback {
 		s.ResponseFallbacks++
@@ -167,7 +191,7 @@ func (s liveProvenanceSummary) lastTurnFailure(step Step) string {
 
 func (s liveProvenanceSummary) String() string {
 	return fmt.Sprintf(
-		"turns=%d generator_used=%d repaired=%d canonicalized=%d raw_plans=%d resolved_plans=%d parse_fallbacks=%d fallback_errors=%d response_generated=%d response_fallbacks=%d last_response_raw=%q",
+		"turns=%d generator_used=%d repaired=%d canonicalized=%d raw_plans=%d resolved_plans=%d parse_fallbacks=%d fallback_errors=%d response_generated=%d response_fallbacks=%d response_repair_attempts=%d response_repair_successes=%d last_response_raw=%q",
 		s.Turns,
 		s.GeneratorUsed,
 		s.Repaired,
@@ -178,6 +202,8 @@ func (s liveProvenanceSummary) String() string {
 		s.FallbackErrors,
 		s.ResponseGenerated,
 		s.ResponseFallbacks,
+		s.ResponseRepairAttempts,
+		s.ResponseRepairSuccesses,
 		s.LastResponseRaw,
 	)
 }
