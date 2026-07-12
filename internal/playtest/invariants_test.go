@@ -81,6 +81,58 @@ func TestCaptureSortsAndDeepCopiesWorldState(t *testing.T) {
 	}
 }
 
+func TestCaptureDeepCopiesConversationAndObservationState(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	state.KnownExitDirections = map[game.RoomID]map[string]bool{
+		scenario.RoomReception: {"east": true},
+	}
+	state.RecentReferents = []game.ReferentGroup{{
+		ObjectIDs: []game.ObjectID{scenario.ObjectReceptionDesk},
+		ItemIDs:   []game.ItemID{scenario.ItemFlashlight},
+	}}
+	state.ObservedObjectFacts = map[game.ObjectID]map[game.FactKind]game.Fact{
+		scenario.ObjectReceptionDesk: {
+			game.FactRoomDescription: {ID: "desk:description", Text: "before"},
+		},
+	}
+	state.LastMentionedItemID = scenario.ItemFlashlight
+	state.LastMentionedItemIDs = []game.ItemID{scenario.ItemFlashlight, scenario.ItemBrassKey}
+
+	snapshot := Capture(state)
+
+	state.KnownExitDirections[scenario.RoomReception]["east"] = false
+	state.RecentReferents[0].ObjectIDs[0] = scenario.ObjectReceptionFloor
+	state.RecentReferents[0].ItemIDs[0] = scenario.ItemBrassKey
+	state.ObservedObjectFacts[scenario.ObjectReceptionDesk][game.FactRoomDescription] = game.Fact{ID: "desk:description", Text: "after"}
+	state.LastMentionedItemID = scenario.ItemBrassKey
+	state.LastMentionedItemIDs[0] = scenario.ItemBrassKey
+
+	if !snapshot.KnownExitDirections[scenario.RoomReception]["east"] {
+		t.Fatalf("known exits mutated: %#v", snapshot.KnownExitDirections)
+	}
+	if got := snapshot.RecentReferents[0]; got.ObjectIDs[0] != scenario.ObjectReceptionDesk || got.ItemIDs[0] != scenario.ItemFlashlight {
+		t.Fatalf("referents mutated: %#v", snapshot.RecentReferents)
+	}
+	if got := snapshot.ObservedObjectFacts[scenario.ObjectReceptionDesk][game.FactRoomDescription].Text; got != "before" {
+		t.Fatalf("observed fact = %q, want before", got)
+	}
+	if snapshot.LastMentionedItemID != scenario.ItemFlashlight || snapshot.LastMentionedItemIDs[0] != scenario.ItemFlashlight {
+		t.Fatalf("last mentioned items mutated: %#v", snapshot)
+	}
+}
+
+func TestSameWorldIgnoresConversationMemory(t *testing.T) {
+	before := Capture(scenario.NewPrototypeWorld())
+	after := before
+	after.RecentReferents = []game.ReferentGroup{{ItemIDs: []game.ItemID{scenario.ItemFlashlight}}}
+	after.LastMentionedItemID = scenario.ItemFlashlight
+	after.LastMentionedItemIDs = []game.ItemID{scenario.ItemFlashlight}
+
+	if !SameWorld(before, after) {
+		t.Fatalf("SameWorld treats conversation memory as world state: before=%#v after=%#v", before, after)
+	}
+}
+
 func TestSameWorldDetectsContainedItemReveal(t *testing.T) {
 	before := Capture(scenario.NewPrototypeWorld())
 	after := before

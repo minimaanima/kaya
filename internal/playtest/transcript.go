@@ -9,6 +9,7 @@ import (
 	"kaya/internal/intent"
 	"kaya/internal/kaya"
 	"kaya/internal/rungen"
+	"kaya/internal/turn"
 	"kaya/internal/world"
 )
 
@@ -45,6 +46,7 @@ func RenderMarkdown(value Session) string {
 		writePlan(&b, "Raw actions", step.Turn.Provenance.RawPlan, step.Turn.Provenance.HasRawPlan)
 		writePlan(&b, "Resolved actions", step.Turn.Plan, true)
 		writeProvenance(&b, step.Turn.Provenance)
+		fmt.Fprintf(&b, "Processed turn duration: `%d`\n\n", step.Turn.DurationSeconds)
 		writeResult(&b, step)
 		writeResponse(&b, step)
 		writeSnapshot(&b, "After", step.After)
@@ -68,9 +70,9 @@ func writePlan(b *strings.Builder, title string, plan intent.TurnPlan, present b
 	}
 
 	var details strings.Builder
-	fmt.Fprintf(&details, "confidence=%.2f needsClarification=%t\n", plan.Confidence, plan.NeedsClarification)
+	fmt.Fprintf(&details, "confidence=%.2f needs_clarification=%t\nraw_text=%q\nclarification_question=%q\n", plan.Confidence, plan.NeedsClarification, plan.RawText, plan.ClarificationQuestion)
 	for index, action := range plan.Actions {
-		fmt.Fprintf(&details, "action %d: action=%q target=%q item=%q direction=%q targetMode=%q confidence=%.2f modifiers=%s\n", index+1, action.Intent.Action, action.Intent.Target, action.Intent.Item, action.Intent.Direction, action.TargetMode, action.Intent.Confidence, joinSorted(action.Intent.Modifiers))
+		fmt.Fprintf(&details, "action %d: target_mode=%q %s\n", index+1, action.TargetMode, formatIntent(action.Intent))
 	}
 	for index, question := range plan.Questions {
 		fmt.Fprintf(&details, "question %d: kind=%q target=%q targetMode=%q\n", index+1, question.Kind, question.Target, question.TargetMode)
@@ -79,9 +81,6 @@ func writePlan(b *strings.Builder, title string, plan intent.TurnPlan, present b
 		details.WriteString("none\n")
 	}
 	writeFenced(details.String(), b)
-	if plan.NeedsClarification || strings.TrimSpace(plan.ClarificationQuestion) != "" {
-		writeFencedSection(b, title+" clarification question", plan.ClarificationQuestion)
-	}
 }
 
 func writeProvenance(b *strings.Builder, provenance intent.ParseProvenance) {
@@ -132,76 +131,95 @@ func generatorProvenance(source intent.ParseSource) string {
 
 func writeResult(b *strings.Builder, step Step) {
 	result := step.Turn.Result
+	b.WriteString("Result metadata:\n")
+	writeFenced(fmt.Sprintf("stop_reason=%q\nclarification_question=%q\nemotion=%q\n", result.StopReason, result.ClarificationQuestion, result.Emotion), b)
 	b.WriteString("Outcomes:\n")
 	events := make([]game.WorldEvent, 0)
 	if len(result.Outcomes) == 0 {
 		b.WriteString("- none\n")
 	} else {
 		for index, outcome := range result.Outcomes {
-			fmt.Fprintf(b, "- %d: action=`%s` targetObject=`%s` status=`%s` outcome=`%s` start=`%d` duration=`%d` danger=`%s`\n", index+1, outcome.Intent.Action, outcome.TargetObjectID, outcome.Result.Status, outcome.Result.Outcome, outcome.Result.StartedAtSeconds, outcome.Result.DurationSeconds, outcome.Result.Danger)
-			writeFacts(b, "  Facts", outcome.Result.VisibleFacts)
-			writeEvents(b, "  Outcome events", outcome.Result.Events)
+			fmt.Fprintf(b, "Outcome %d:\n", index+1)
+			writeFenced(formatActionOutcome(outcome), b)
 			events = append(events, outcome.Result.Events...)
 		}
 	}
 	writeEvents(b, "Events", events)
-	fmt.Fprintf(b, "Stop reason: `%s`\n", result.StopReason)
-	if strings.TrimSpace(result.ClarificationQuestion) != "" {
-		writeFencedSection(b, "Result clarification question", result.ClarificationQuestion)
-	}
 	writeFacts(b, "Question facts", result.QuestionFacts)
 	b.WriteByte('\n')
+}
+
+func formatActionOutcome(outcome turn.ActionOutcome) string {
+	result := outcome.Result
+	return fmt.Sprintf(
+		"intent: %s\ntarget_object_id=%q\nstatus=%q\ntarget_object_ids=[%s]\nstarted_at_seconds=%d\nduration_seconds=%d\noutcome=%q\nstress_delta=%d trust_delta=%d fear_delta=%d pain_delta=%d exhaustion_delta=%d\ndanger=%q\nneeds_clarification=%t\nclarification_question=%q\nvisible_facts:\n%s\nevents:\n%s\n",
+		formatIntent(outcome.Intent),
+		outcome.TargetObjectID,
+		result.Status,
+		joinObjectIDsPreserved(result.TargetObjectIDs),
+		result.StartedAtSeconds,
+		result.DurationSeconds,
+		result.Outcome,
+		result.StressDelta,
+		result.TrustDelta,
+		result.FearDelta,
+		result.PainDelta,
+		result.ExhaustionDelta,
+		result.Danger,
+		result.NeedsClarification,
+		result.ClarificationQuestion,
+		formatFacts(result.VisibleFacts),
+		formatEvents(result.Events),
+	)
+}
+
+func formatIntent(value intent.Intent) string {
+	return fmt.Sprintf(
+		"action=%q target=%q item=%q direction=%q modifiers=[%s] confidence=%.2f raw_text=%q needs_clarification=%t clarification_question=%q",
+		value.Action,
+		value.Target,
+		value.Item,
+		value.Direction,
+		joinPreserved(value.Modifiers),
+		value.Confidence,
+		value.RawText,
+		value.NeedsClarification,
+		value.ClarificationQuestion,
+	)
 }
 
 func writeFacts(b *strings.Builder, title string, facts []game.Fact) {
 	b.WriteString(title)
 	b.WriteString(":\n")
-	cloned := append([]game.Fact(nil), facts...)
-	sort.Slice(cloned, func(i, j int) bool {
-		left, right := cloned[i], cloned[j]
-		if left.ID != right.ID {
-			return left.ID < right.ID
-		}
-		if left.Kind != right.Kind {
-			return left.Kind < right.Kind
-		}
-		if left.Subject != right.Subject {
-			return left.Subject < right.Subject
-		}
-		if left.Value != right.Value {
-			return left.Value < right.Value
-		}
-		return left.Text < right.Text
-	})
-	if len(cloned) == 0 {
-		b.WriteString("- none\n")
-		return
-	}
-	for _, fact := range cloned {
-		fmt.Fprintf(b, "- id=`%s` kind=`%s` subject=%q value=%q required=`%t` text=%q\n", fact.ID, fact.Kind, fact.Subject, fact.Value, fact.Required, fact.Text)
-	}
+	writeFenced(formatFacts(facts), b)
 }
 
 func writeEvents(b *strings.Builder, title string, events []game.WorldEvent) {
 	b.WriteString(title)
 	b.WriteString(":\n")
-	cloned := append([]game.WorldEvent(nil), events...)
-	sort.Slice(cloned, func(i, j int) bool {
-		if cloned[i].Type != cloned[j].Type {
-			return cloned[i].Type < cloned[j].Type
-		}
-		if cloned[i].Description != cloned[j].Description {
-			return cloned[i].Description < cloned[j].Description
-		}
-		return cloned[i].Danger < cloned[j].Danger
-	})
-	if len(cloned) == 0 {
-		b.WriteString("- none\n")
-		return
+	writeFenced(formatEvents(events), b)
+}
+
+func formatFacts(facts []game.Fact) string {
+	if len(facts) == 0 {
+		return "none\n"
 	}
-	for _, event := range cloned {
-		fmt.Fprintf(b, "- type=`%s` danger=`%s` description=%q\n", event.Type, event.Danger, event.Description)
+	var b strings.Builder
+	for index, fact := range facts {
+		fmt.Fprintf(&b, "fact %d: id=%q kind=%q subject=%q value=%q text=%q required=%t\n", index+1, fact.ID, fact.Kind, fact.Subject, fact.Value, fact.Text, fact.Required)
 	}
+	return b.String()
+}
+
+func formatEvents(events []game.WorldEvent) string {
+	if len(events) == 0 {
+		return "none\n"
+	}
+	var b strings.Builder
+	for index, event := range events {
+		fmt.Fprintf(&b, "event %d: type=%q description=%q danger=%q\n", index+1, event.Type, event.Description, event.Danger)
+	}
+	return b.String()
 }
 
 func writeResponse(b *strings.Builder, step Step) {
@@ -210,7 +228,6 @@ func writeResponse(b *strings.Builder, step Step) {
 	b.WriteString("Response metadata:\n")
 	fmt.Fprintf(b, "- Fallback flag: `%t`\n", response.UsedFallback)
 	ids := append([]game.FactID(nil), response.UsedFactIDs...)
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	if len(ids) == 0 {
 		b.WriteString("- Used fact IDs: none\n\n")
 	} else {
@@ -248,11 +265,20 @@ func writeStateDiff(b *strings.Builder, before, after Snapshot) {
 	sort.Strings(keys)
 	found := false
 	for _, key := range keys {
-		if left[key] == right[key] {
+		beforeValue, beforePresent := left[key]
+		afterValue, afterPresent := right[key]
+		if beforePresent && afterPresent && beforeValue == afterValue {
 			continue
 		}
 		found = true
-		fmt.Fprintf(b, "- %s: before=%q after=%q\n", key, left[key], right[key])
+		switch {
+		case !beforePresent:
+			fmt.Fprintf(b, "- %s: added=%q\n", key, afterValue)
+		case !afterPresent:
+			fmt.Fprintf(b, "- %s: removed=%q\n", key, beforeValue)
+		default:
+			fmt.Fprintf(b, "- %s: before=%q after=%q\n", key, beforeValue, afterValue)
+		}
 	}
 	if !found {
 		b.WriteString("- none\n")
@@ -274,7 +300,7 @@ func writeViolations(b *strings.Builder, violations []Violation) {
 		return
 	}
 	for _, violation := range cloned {
-		fmt.Fprintf(b, "- code=`%s`\n", violation.Code)
+		writeFencedSection(b, "Violation code", violation.Code)
 		writeFencedSection(b, "Violation detail", violation.Detail)
 	}
 }
@@ -319,6 +345,29 @@ func snapshotEntryMap(snapshot Snapshot) map[string]string {
 	}
 	for _, key := range sortedDoorKeys(snapshot.DoorStates) {
 		entries["door_state."+string(key)] = string(snapshot.DoorStates[key])
+	}
+	for _, roomID := range sortedKnownExitRoomKeys(snapshot.KnownExitDirections) {
+		prefix := "known_exit_directions." + string(roomID)
+		entries[prefix] = "present"
+		for _, direction := range sortedDirectionKeys(snapshot.KnownExitDirections[roomID]) {
+			entries[prefix+"."+direction] = fmt.Sprintf("%t", snapshot.KnownExitDirections[roomID][direction])
+		}
+	}
+	for index, group := range snapshot.RecentReferents {
+		prefix := fmt.Sprintf("recent_referents.%d", index)
+		entries[prefix] = "present"
+		entries[prefix+".object_ids"] = joinObjectIDsPreserved(group.ObjectIDs)
+		entries[prefix+".item_ids"] = joinItemIDsPreserved(group.ItemIDs)
+	}
+	entries["last_mentioned_item_id"] = string(snapshot.LastMentionedItemID)
+	entries["last_mentioned_item_ids"] = joinItemIDsPreserved(snapshot.LastMentionedItemIDs)
+	for _, objectID := range sortedObservedFactObjectKeys(snapshot.ObservedObjectFacts) {
+		prefix := "observed_object_facts." + string(objectID)
+		entries[prefix] = "present"
+		for _, kind := range sortedFactKindKeys(snapshot.ObservedObjectFacts[objectID]) {
+			fact := snapshot.ObservedObjectFacts[objectID][kind]
+			entries[prefix+"."+string(kind)] = formatFact(fact)
+		}
 	}
 	return entries
 }
@@ -365,6 +414,30 @@ func joinScheduledEvents(values []world.ScheduledEvent) string {
 	return strings.Join(parts, ",")
 }
 
+func joinPreserved(values []string) string {
+	return strings.Join(values, ",")
+}
+
+func joinObjectIDsPreserved(values []game.ObjectID) string {
+	formatted := make([]string, len(values))
+	for index, value := range values {
+		formatted[index] = string(value)
+	}
+	return strings.Join(formatted, ",")
+}
+
+func joinItemIDsPreserved(values []game.ItemID) string {
+	formatted := make([]string, len(values))
+	for index, value := range values {
+		formatted[index] = string(value)
+	}
+	return strings.Join(formatted, ",")
+}
+
+func formatFact(fact game.Fact) string {
+	return fmt.Sprintf("id=%q kind=%q subject=%q value=%q text=%q required=%t", fact.ID, fact.Kind, fact.Subject, fact.Value, fact.Text, fact.Required)
+}
+
 func joinSorted(values []string) string {
 	cloned := append([]string(nil), values...)
 	sort.Strings(cloned)
@@ -400,6 +473,42 @@ func sortedObjectItemKeys(values map[game.ObjectID][]game.ItemID) []game.ObjectI
 
 func sortedDoorKeys(values map[game.DoorID]world.DoorState) []game.DoorID {
 	keys := make([]game.DoorID, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	return keys
+}
+
+func sortedKnownExitRoomKeys(values map[game.RoomID]map[string]bool) []game.RoomID {
+	keys := make([]game.RoomID, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	return keys
+}
+
+func sortedDirectionKeys(values map[string]bool) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func sortedObservedFactObjectKeys(values map[game.ObjectID]map[game.FactKind]game.Fact) []game.ObjectID {
+	keys := make([]game.ObjectID, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	return keys
+}
+
+func sortedFactKindKeys(values map[game.FactKind]game.Fact) []game.FactKind {
+	keys := make([]game.FactKind, 0, len(values))
 	for key := range values {
 		keys = append(keys, key)
 	}

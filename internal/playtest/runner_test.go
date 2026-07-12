@@ -72,6 +72,31 @@ func TestRunnerStepStoresResponseViolationBeforeReturning(t *testing.T) {
 	}
 }
 
+func TestRunnerSessionClonesConversationSnapshots(t *testing.T) {
+	generated := mustGeneratedRun(t, 1)
+	generated.State.KnownExitDirections = map[game.RoomID]map[string]bool{scenario.RoomReception: {"east": true}}
+	generated.State.RecentReferents = []game.ReferentGroup{{ItemIDs: []game.ItemID{scenario.ItemFlashlight}}}
+	generated.State.ObservedObjectFacts = map[game.ObjectID]map[game.FactKind]game.Fact{
+		scenario.ObjectReceptionDesk: {game.FactRoomDescription: {Text: "before"}},
+	}
+	generated.State.LastMentionedItemIDs = []game.ItemID{scenario.ItemFlashlight}
+	runner := NewRunner(runscenario.PrototypeDefinition(), generated, errorParser{err: errors.New("stop")}, fallbackComposer{})
+	if _, err := runner.Step(context.Background(), "wait"); err == nil {
+		t.Fatal("Step returned nil error")
+	}
+
+	copy := runner.Session()
+	copy.Steps[0].Before.KnownExitDirections[scenario.RoomReception]["east"] = false
+	copy.Steps[0].Before.RecentReferents[0].ItemIDs[0] = scenario.ItemBrassKey
+	copy.Steps[0].Before.ObservedObjectFacts[scenario.ObjectReceptionDesk][game.FactRoomDescription] = game.Fact{Text: "after"}
+	copy.Steps[0].Before.LastMentionedItemIDs[0] = scenario.ItemBrassKey
+
+	again := runner.Session().Steps[0].Before
+	if !again.KnownExitDirections[scenario.RoomReception]["east"] || again.RecentReferents[0].ItemIDs[0] != scenario.ItemFlashlight || again.ObservedObjectFacts[scenario.ObjectReceptionDesk][game.FactRoomDescription].Text != "before" || again.LastMentionedItemIDs[0] != scenario.ItemFlashlight {
+		t.Fatalf("runner session snapshot was aliased: %#v", again)
+	}
+}
+
 func TestCaptureAndCheckTransitionAcceptValidMove(t *testing.T) {
 	generated := mustGeneratedRun(t, 1)
 	runner := NewRunner(runscenario.PrototypeDefinition(), generated, fallbackParser{}, fallbackComposer{})

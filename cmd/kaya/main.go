@@ -203,18 +203,60 @@ func resultDuration(result turn.Result) int {
 }
 
 func runPlaytest(args []string) error {
-	options, err := parsePlaytestOptions(args, newRunSeed)
+	return runPlaytestWith(args, newRunSeed, newPrototypePlaytestExecutor, writePlaytestLog, os.Stdout)
+}
+
+type playtestExecutor interface {
+	Run(context.Context) error
+	Session() playtest.Session
+}
+
+type prototypePlaytestExecutor struct {
+	runner    *playtest.Runner
+	generated rungen.GeneratedRun
+	seed      int64
+}
+
+func (e prototypePlaytestExecutor) Run(ctx context.Context) error {
+	return playtest.RunPrototypeSession(ctx, e.runner, e.generated, e.seed)
+}
+
+func (e prototypePlaytestExecutor) Session() playtest.Session {
+	return e.runner.Session()
+}
+
+func runPlaytestWith(
+	args []string,
+	generateSeed func() (int64, error),
+	start func(playOptions) (playtestExecutor, error),
+	write func(playtest.Session) (string, error),
+	output io.Writer,
+) error {
+	options, err := parsePlaytestOptions(args, generateSeed)
 	if err != nil {
 		return err
 	}
+	executor, err := start(options)
+	if err != nil {
+		return err
+	}
+	runErr := executor.Run(context.Background())
+	logPath, logErr := write(executor.Session())
+	if logErr != nil {
+		return logErr
+	}
+	fmt.Fprintln(output, "Playtest log:", logPath)
+	return runErr
+}
 
+func newPrototypePlaytestExecutor(options playOptions) (playtestExecutor, error) {
 	definition := runscenario.PrototypeDefinition()
 	generated, err := rungen.Generate(
 		rungen.RunConfig{Seed: options.Seed, GeneratorVersion: rungen.CurrentGeneratorVersion},
 		definition,
 	)
 	if err != nil {
-		return fmt.Errorf("generate playtest run: %w", err)
+		return nil, fmt.Errorf("generate playtest run: %w", err)
 	}
 
 	var parser session.Parser = intent.NewParser(nil)
@@ -224,20 +266,14 @@ func runPlaytest(args []string) error {
 		baseURL := envOrDefault("KAYA_OLLAMA_URL", llm.DefaultOllamaURL)
 		client, err := llm.NewOllamaClient(model, llm.WithOllamaBaseURL(baseURL))
 		if err != nil {
-			return err
+			return nil, err
 		}
 		parser = intent.NewParser(client)
 		composer = response.NewComposer(client)
 	}
 
 	runner := playtest.NewRunner(definition, generated, parser, composer)
-	runErr := playtest.RunPrototypeSession(context.Background(), runner, generated, options.Seed)
-	logPath, logErr := writePlaytestLog(runner.Session())
-	if logErr != nil {
-		return logErr
-	}
-	fmt.Println("Playtest log:", logPath)
-	return runErr
+	return prototypePlaytestExecutor{runner: runner, generated: generated, seed: options.Seed}, nil
 }
 
 type playOptions struct {

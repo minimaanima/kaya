@@ -133,6 +133,10 @@ func cloneSnapshot(value Snapshot) Snapshot {
 	for doorID, state := range value.DoorStates {
 		cloned.DoorStates[doorID] = state
 	}
+	cloned.KnownExitDirections = cloneKnownExitDirections(value.KnownExitDirections)
+	cloned.RecentReferents = cloneReferentGroups(value.RecentReferents)
+	cloned.ObservedObjectFacts = cloneObservedObjectFacts(value.ObservedObjectFacts)
+	cloned.LastMentionedItemIDs = append([]game.ItemID(nil), value.LastMentionedItemIDs...)
 	cloned.RemainingEventTimes = append([]int(nil), value.RemainingEventTimes...)
 	cloned.RemainingEvents = append([]world.ScheduledEvent(nil), value.RemainingEvents...)
 	return cloned

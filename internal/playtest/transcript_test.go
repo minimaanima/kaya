@@ -100,7 +100,7 @@ func TestRenderMarkdownIncludesReproductionEvidence(t *testing.T) {
 		"Outcomes:",
 		"Events:",
 		"Response metadata:",
-		"Used fact IDs: `a`, `z`",
+		"Used fact IDs: `z`, `a`",
 		"Before:",
 		"After:",
 		"State diff:",
@@ -130,6 +130,140 @@ func TestRenderMarkdownIsStableAcrossMapIteration(t *testing.T) {
 
 	if got, want := RenderMarkdown(first), RenderMarkdown(second); got != want {
 		t.Fatalf("transcripts differ for equivalent snapshots:\nfirst:\n%s\nsecond:\n%s", got, want)
+	}
+}
+
+func TestRenderMarkdownPreservesCompleteTurnEvidenceAndSemanticOrder(t *testing.T) {
+	step := Step{
+		Number: 1,
+		Turn: session.ProcessedTurn{
+			DurationSeconds: 17,
+			Plan: intent.TurnPlan{
+				Actions: []intent.PlannedAction{{
+					Intent: intent.Intent{
+						Action:                intent.ActionMove,
+						Target:                "target ``` text",
+						Item:                  "key",
+						Direction:             "north",
+						Modifiers:             []string{"then", "quietly"},
+						Confidence:            0.75,
+						RawText:               "intent raw ``` text",
+						NeedsClarification:    true,
+						ClarificationQuestion: "intent question ``` text",
+					},
+					TargetMode: intent.TargetAll,
+				}},
+				Questions:             []intent.FactQuestion{{Kind: game.FactLifeStatus, Target: "doctors", TargetMode: intent.TargetAll}},
+				Confidence:            0.9,
+				NeedsClarification:    true,
+				ClarificationQuestion: "turn question ``` text",
+				RawText:               "turn raw ``` text",
+			},
+			Provenance: intent.ParseProvenance{
+				Source: intent.ParseSourceModel,
+				RawPlan: intent.TurnPlan{
+					Actions: []intent.PlannedAction{{Intent: intent.Intent{Action: intent.ActionTalk, RawText: "raw action text"}, TargetMode: intent.TargetSingle}},
+					RawText: "raw plan text",
+				},
+				HasRawPlan: true,
+			},
+			Result: turn.Result{
+				StopReason:            "stop ``` text",
+				ClarificationQuestion: "result question ``` text",
+				Emotion:               kaya.EmotionScared,
+				QuestionFacts: []game.Fact{
+					{ID: "question-z", Text: "question z"},
+					{ID: "question-a", Text: "question a"},
+				},
+				Outcomes: []turn.ActionOutcome{{
+					Intent:         intent.Intent{Action: intent.ActionMove, RawText: "outcome intent raw", NeedsClarification: true, ClarificationQuestion: "outcome intent question"},
+					TargetObjectID: "desk",
+					Result: game.ActionResult{
+						Status:                game.ActionClarification,
+						TargetObjectIDs:       []game.ObjectID{"desk", "door"},
+						StartedAtSeconds:      11,
+						DurationSeconds:       6,
+						Outcome:               "outcome ``` text",
+						VisibleFacts:          []game.Fact{{ID: "visible-z", Text: "visible z"}, {ID: "visible-a", Text: "visible a"}},
+						Events:                []game.WorldEvent{{Description: "event z"}, {Description: "event a"}},
+						StressDelta:           1,
+						TrustDelta:            -2,
+						FearDelta:             3,
+						PainDelta:             -4,
+						ExhaustionDelta:       5,
+						Danger:                game.DangerHigh,
+						NeedsClarification:    true,
+						ClarificationQuestion: "action result question ``` text",
+					},
+				}},
+			},
+			Response: response.Response{UsedFactIDs: []game.FactID{"fact-z", "fact-a"}},
+		},
+		Violations: []Violation{{Code: "code ``` text", Detail: "detail"}},
+	}
+
+	got := RenderMarkdown(Session{Steps: []Step{step}})
+	for _, expected := range []string{
+		"Processed turn duration: `17`",
+		"turn raw ``` text",
+		"intent raw ``` text",
+		"intent question ``` text",
+		"stop ``` text",
+		"result question ``` text",
+		"emotion=\"scared\"",
+		"target_object_ids=[desk,door]",
+		"stress_delta=1 trust_delta=-2 fear_delta=3 pain_delta=-4 exhaustion_delta=5",
+		"action result question ``` text",
+		"Used fact IDs: `fact-z`, `fact-a`",
+		"Violation code:",
+	} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("missing %q:\n%s", expected, got)
+		}
+	}
+	for _, ordered := range [][2]string{
+		{"visible z", "visible a"},
+		{"event z", "event a"},
+		{"question z", "question a"},
+	} {
+		if strings.Index(got, ordered[0]) > strings.Index(got, ordered[1]) {
+			t.Fatalf("semantic sequence reordered %q before %q:\n%s", ordered[0], ordered[1], got)
+		}
+	}
+	if strings.Contains(got, "- code=`code ``` text`") {
+		t.Fatalf("violation code was rendered inline:\n%s", got)
+	}
+}
+
+func TestRenderMarkdownDistinguishesPresentEmptyStateEntries(t *testing.T) {
+	missing := Snapshot{}
+	present := Snapshot{
+		ItemAliases:         map[game.ItemID][]string{"flashlight": {}},
+		ObjectItems:         map[game.ObjectID][]game.ItemID{"desk": {}},
+		ObjectRevealedItems: map[game.ObjectID][]game.ItemID{"desk": {}},
+		KnownExitDirections: map[game.RoomID]map[string]bool{"reception": {}},
+		ObservedObjectFacts: map[game.ObjectID]map[game.FactKind]game.Fact{"desk": {}},
+	}
+
+	got := RenderMarkdown(Session{Steps: []Step{
+		{Number: 1, Before: missing, After: present},
+		{Number: 2, Before: present, After: missing},
+	}})
+	for _, expected := range []string{
+		"item_aliases.flashlight: added=\"\"",
+		"object_items.desk: added=\"\"",
+		"object_revealed_items.desk: added=\"\"",
+		"known_exit_directions.reception: added=\"present\"",
+		"observed_object_facts.desk: added=\"present\"",
+		"item_aliases.flashlight: removed=\"\"",
+		"object_items.desk: removed=\"\"",
+		"object_revealed_items.desk: removed=\"\"",
+		"known_exit_directions.reception: removed=\"present\"",
+		"observed_object_facts.desk: removed=\"present\"",
+	} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("missing state-diff entry %q:\n%s", expected, got)
+		}
 	}
 }
 

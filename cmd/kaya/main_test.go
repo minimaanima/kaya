@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -118,6 +120,52 @@ func TestPlaytestLogPathIncludesFilesystemSafeSeed(t *testing.T) {
 	}
 }
 
+func TestPlaytestLogPathHandlesInt64Extremes(t *testing.T) {
+	for _, test := range []struct {
+		seed int64
+		want string
+	}{
+		{seed: math.MinInt64, want: filepath.Join("playtest_logs", "seed--9223372036854775808.md")},
+		{seed: math.MaxInt64, want: filepath.Join("playtest_logs", "seed-9223372036854775807.md")},
+	} {
+		if got := playtestLogPath(test.seed); got != test.want {
+			t.Fatalf("seed %d path = %q, want %q", test.seed, got, test.want)
+		}
+	}
+}
+
+func TestRunPlaytestWritesFailingStepBeforeReturningRunError(t *testing.T) {
+	want := errors.New("invariant failure")
+	executor := fakePlaytestExecutor{
+		runErr: want,
+		session: playtest.Session{Seed: 42, Steps: []playtest.Step{{
+			Number: 1,
+			Player: "wait",
+			Error:  want.Error(),
+		}}},
+	}
+	written := false
+	err := runPlaytestWith(
+		[]string{"--seed", "42"},
+		func() (int64, error) { return 0, errors.New("seed should not be generated") },
+		func(playOptions) (playtestExecutor, error) { return executor, nil },
+		func(session playtest.Session) (string, error) {
+			written = true
+			if len(session.Steps) != 1 || session.Steps[0].Error != want.Error() {
+				t.Fatalf("written session = %#v", session)
+			}
+			return "playtest_logs/seed-42.md", nil
+		},
+		io.Discard,
+	)
+	if !errors.Is(err, want) {
+		t.Fatalf("error = %v, want %v", err, want)
+	}
+	if !written {
+		t.Fatal("transcript was not written before the run error returned")
+	}
+}
+
 func TestWritePlaytestLogDelegatesToRenderMarkdown(t *testing.T) {
 	workingDirectory, err := os.Getwd()
 	if err != nil {
@@ -155,6 +203,15 @@ func TestWritePlaytestLogDelegatesToRenderMarkdown(t *testing.T) {
 		t.Fatalf("log differs from canonical transcript:\n%s", got)
 	}
 }
+
+type fakePlaytestExecutor struct {
+	session playtest.Session
+	runErr  error
+}
+
+func (f fakePlaytestExecutor) Run(context.Context) error { return f.runErr }
+
+func (f fakePlaytestExecutor) Session() playtest.Session { return f.session }
 
 func TestReadRunSeedRetriesZeroAndClearsSignBit(t *testing.T) {
 	var data [16]byte
