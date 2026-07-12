@@ -27,6 +27,18 @@ func (fallbackParser) ParseWithProvenance(
 	}, nil
 }
 
+type errorParser struct {
+	err error
+}
+
+func (p errorParser) ParseWithProvenance(
+	_ context.Context,
+	_ string,
+	_ game.PerceptionSnapshot,
+) (intent.TurnPlan, intent.ParseProvenance, error) {
+	return intent.TurnPlan{}, intent.ParseProvenance{}, p.err
+}
+
 type fallbackComposer struct{}
 
 func (fallbackComposer) Compose(_ context.Context, bundle turn.FactBundle) response.Response {

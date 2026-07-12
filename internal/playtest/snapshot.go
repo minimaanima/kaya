@@ -18,12 +18,16 @@ func Capture(state *world.State) Snapshot {
 		Time:                state.NowSeconds,
 		Inventory:           sortedPresentItems(state.Inventory),
 		Discovered:          sortedPresentItems(state.DiscoveredItems),
+		ItemNames:           make(map[game.ItemID]string, len(state.Items)),
 		ObjectItems:         make(map[game.ObjectID][]game.ItemID, len(state.Objects)),
 		ObjectRevealedItems: make(map[game.ObjectID][]game.ItemID, len(state.Objects)),
 		DoorStates:          make(map[game.DoorID]world.DoorState, len(state.Doors)),
 		RemainingEventTimes: make([]int, 0, len(state.ScheduledEvents)),
 		ActiveLight:         state.ActiveLight,
 		Kaya:                state.Kaya,
+	}
+	for itemID, item := range state.Items {
+		snapshot.ItemNames[itemID] = item.Name
 	}
 	for objectID, object := range state.Objects {
 		snapshot.ObjectItems[objectID] = sortedItemIDs(object.ContainedItems)

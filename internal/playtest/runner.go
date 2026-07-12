@@ -52,7 +52,13 @@ func (r *Runner) Step(ctx context.Context, message string) (Step, error) {
 	}
 	processed, err := session.ProcessTurn(ctx, message, r.run.State, r.parser, r.composer)
 	if err != nil {
-		return Step{}, err
+		step.Error = err.Error()
+		step.After = Capture(r.run.State)
+		step.Violations = append(step.Violations, CheckState(r.run.State)...)
+		step.Violations = append(step.Violations, CheckTransition(r.definition, step)...)
+		step.Violations = sortViolations(step.Violations)
+		r.session.Steps = append(r.session.Steps, cloneStep(step))
+		return step, fmt.Errorf("process turn: %w", err)
 	}
 	step.Turn = cloneProcessedTurn(processed)
 	step.After = Capture(r.run.State)
@@ -112,6 +118,10 @@ func cloneSnapshot(value Snapshot) Snapshot {
 	cloned := value
 	cloned.Inventory = append([]game.ItemID(nil), value.Inventory...)
 	cloned.Discovered = append([]game.ItemID(nil), value.Discovered...)
+	cloned.ItemNames = make(map[game.ItemID]string, len(value.ItemNames))
+	for itemID, name := range value.ItemNames {
+		cloned.ItemNames[itemID] = name
+	}
 	cloned.ObjectItems = cloneObjectItems(value.ObjectItems)
 	cloned.ObjectRevealedItems = cloneObjectItems(value.ObjectRevealedItems)
 	cloned.DoorStates = make(map[game.DoorID]world.DoorState, len(value.DoorStates))

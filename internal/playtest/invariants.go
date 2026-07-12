@@ -46,20 +46,23 @@ func CheckState(state *world.State) []Violation {
 	}
 	for itemID, itemLocations := range locations {
 		if len(itemLocations) > 1 {
+			sort.Strings(itemLocations)
 			violations = append(violations, Violation{Code: "item_multiple_locations", Detail: fmt.Sprintf("item %q has locations %v", itemID, itemLocations)})
 		}
 	}
 
-	previousTime := -1
+	previousTime := 0
+	hasPreviousTime := false
 	for _, event := range state.ScheduledEvents {
 		if event.TriggerAtSeconds <= state.NowSeconds {
 			violations = append(violations, Violation{Code: "event_before_current_time", Detail: fmt.Sprintf("event at %d is not after %d", event.TriggerAtSeconds, state.NowSeconds)})
 		}
-		if previousTime > event.TriggerAtSeconds {
+		if hasPreviousTime && previousTime > event.TriggerAtSeconds {
 			violations = append(violations, Violation{Code: "event_times_unsorted", Detail: "scheduled event times are not sorted"})
 			break
 		}
 		previousTime = event.TriggerAtSeconds
+		hasPreviousTime = true
 	}
 	return sortViolations(violations)
 }
@@ -78,15 +81,15 @@ func CheckTransition(def rungen.Definition, step Step) []Violation {
 	}
 
 	for _, outcome := range step.Turn.Result.Outcomes {
-		if outcome.Intent.Action == intent.ActionTakeItem && outcome.Result.Outcome == "item_taken" && !takenItemRemoved(step.Before, step.After) {
+		if outcome.Intent.Action == intent.ActionTakeItem && outcome.Result.Outcome == "item_taken" && !takenItemMoved(outcome, step.Before, step.After) {
 			violations = append(violations, Violation{Code: "taken_item_not_removed", Detail: "taken item remains in a container or was not added to inventory"})
 		}
 		if outcome.Intent.Action == intent.ActionMove && outcome.Result.Outcome == "door_blocked" && step.After.CurrentRoom != step.Before.CurrentRoom {
 			violations = append(violations, Violation{Code: "locked_move_changed_room", Detail: "blocked door movement changed current room"})
 		}
 	}
-	if scheduledEventDuplicated(step.Turn.Result.Outcomes) {
-		violations = append(violations, Violation{Code: "scheduled_event_duplicated", Detail: "the same scheduled event was emitted more than once"})
+	if !dueScheduledEventsConsumed(step.Before, step.After) {
+		violations = append(violations, Violation{Code: "scheduled_event_not_consumed", Detail: "a scheduled event due during the elapsed interval remains scheduled"})
 	}
 	return sortViolations(violations)
 }
@@ -103,19 +106,34 @@ func clarificationOrRefusal(result turn.Result) bool {
 	return true
 }
 
-func takenItemRemoved(before, after Snapshot) bool {
-	if len(after.Inventory) <= len(before.Inventory) {
+func takenItemMoved(outcome turn.ActionOutcome, before, after Snapshot) bool {
+	itemID, ok := targetedItemID(outcome, before.ItemNames)
+	if !ok {
 		return false
 	}
-	for _, itemID := range after.Inventory {
-		if containsItem(before.Inventory, itemID) {
+	return !containsItem(before.Inventory, itemID) &&
+		containsItem(after.Inventory, itemID) &&
+		objectContainsItem(before.ObjectItems, itemID) &&
+		!objectContainsItem(after.ObjectItems, itemID)
+}
+
+func targetedItemID(outcome turn.ActionOutcome, itemNames map[game.ItemID]string) (game.ItemID, bool) {
+	target := outcome.Intent.Item
+	if target == "" {
+		target = outcome.Intent.Target
+	}
+
+	var matched game.ItemID
+	for itemID, name := range itemNames {
+		if !world.MatchesTarget(target, name, nil) {
 			continue
 		}
-		if !objectContainsItem(after.ObjectItems, itemID) {
-			return true
+		if matched != "" {
+			return "", false
 		}
+		matched = itemID
 	}
-	return false
+	return matched, matched != ""
 }
 
 func containsItem(items []game.ItemID, target game.ItemID) bool {
@@ -136,15 +154,19 @@ func objectContainsItem(objects map[game.ObjectID][]game.ItemID, target game.Ite
 	return false
 }
 
-func scheduledEventDuplicated(outcomes []turn.ActionOutcome) bool {
-	seen := make(map[string]bool)
-	for _, outcome := range outcomes {
-		for _, event := range outcome.Result.Events {
-			key := string(event.Type) + "\x00" + event.Description + "\x00" + string(event.Danger)
-			if seen[key] {
-				return true
-			}
-			seen[key] = true
+func dueScheduledEventsConsumed(before, after Snapshot) bool {
+	for _, triggerAt := range before.RemainingEventTimes {
+		if triggerAt > before.Time && triggerAt <= after.Time && containsTime(after.RemainingEventTimes, triggerAt) {
+			return false
+		}
+	}
+	return true
+}
+
+func containsTime(times []int, target int) bool {
+	for _, time := range times {
+		if time == target {
+			return true
 		}
 	}
 	return false

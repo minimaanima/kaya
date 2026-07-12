@@ -12,6 +12,7 @@ type Snapshot struct {
 	CurrentRoom, PreviousRoom game.RoomID
 	Time                      int
 	Inventory, Discovered     []game.ItemID
+	ItemNames                 map[game.ItemID]string
 	ObjectItems               map[game.ObjectID][]game.ItemID
 	ObjectRevealedItems       map[game.ObjectID][]game.ItemID
 	DoorStates                map[game.DoorID]world.DoorState
@@ -28,6 +29,7 @@ type Step struct {
 	After            Snapshot
 	ObjectiveEmitted bool
 	Violations       []Violation
+	Error            string
 }
 
 type Session struct {
