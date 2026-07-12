@@ -1,0 +1,171 @@
+package playtest
+
+import (
+	"context"
+	"fmt"
+	"reflect"
+	"strings"
+	"testing"
+
+	"kaya/internal/game"
+	"kaya/internal/intent"
+	"kaya/internal/rungen"
+	"kaya/internal/runscenario"
+	"kaya/internal/scenario"
+)
+
+func TestPrototypeThousandPhraseVariedSessionsReachObjective(t *testing.T) {
+	placementsSeen := map[string]bool{}
+	for seed := int64(1); seed <= 1000; seed++ {
+		run := mustGeneratedRun(t, seed)
+		placementsSeen[placementKey(run.Placements)] = true
+		runner := NewRunner(runscenario.PrototypeDefinition(), run, fallbackParser{}, fallbackComposer{})
+		messages, err := PrototypeWinningMessages(run, seed)
+		if err != nil {
+			t.Fatalf("seed %d placements=%#v: %v", seed, run.Placements, err)
+		}
+		for _, message := range messages {
+			if _, err := runner.Step(context.Background(), message); err != nil {
+				t.Fatalf("seed %d placements=%#v message %q: %v\nsession=%#v", seed, run.Placements, message, err, runner.Session())
+			}
+		}
+		got := runner.Session()
+		if runner.State().CurrentRoomID != scenario.RoomStairwell || got.ObjectiveEmissions != 1 {
+			t.Fatalf("seed %d placements=%#v did not finish\nsession=%#v", seed, run.Placements, got)
+		}
+	}
+	wantPlacements := prototypePlacementKeys()
+	if !reflect.DeepEqual(placementsSeen, wantPlacements) {
+		t.Fatalf("placement combinations = %s, want %s", fmt.Sprint(placementsSeen), fmt.Sprint(wantPlacements))
+	}
+}
+
+func TestPrototypeWinningMessagesUseFallbackExecutableUnlockPhrase(t *testing.T) {
+	run := mustGeneratedRun(t, 2)
+	messages, err := PrototypeWinningMessages(run, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range messages {
+		if strings.Contains(message, "try the key on the stairwell door") {
+			t.Fatalf("messages contain fallback-incompatible unlock phrase: %#v", messages)
+		}
+	}
+}
+
+func TestRunPrototypeSessionPreservesAndExecutesQuarterSeedCompoundTurns(t *testing.T) {
+	tests := []struct {
+		name         string
+		seed         int64
+		wantActions  []intent.Action
+		wantOutcomes []string
+	}{
+		{
+			name:         "take flashlight then move east",
+			seed:         4,
+			wantActions:  []intent.Action{intent.ActionTakeItem, intent.ActionMove},
+			wantOutcomes: []string{"item_taken", "moved"},
+		},
+		{
+			name:         "turn on flashlight then inspect storage",
+			seed:         1,
+			wantActions:  []intent.Action{intent.ActionTurnOn, intent.ActionInspect},
+			wantOutcomes: []string{"flashlight_on", "inspected_room"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			run := mustGeneratedRun(t, test.seed)
+			runner := NewRunner(runscenario.PrototypeDefinition(), run, fallbackParser{}, fallbackComposer{})
+			if err := RunPrototypeSession(context.Background(), runner, run, test.seed); err != nil {
+				t.Fatalf("seed %d placements=%#v: %v\nsession=%#v", test.seed, run.Placements, err, runner.Session())
+			}
+
+			compound := prototypeCompoundStep(t, runner.Session())
+			if len(compound.Turn.Plan.Actions) != 2 || len(compound.Turn.Result.Outcomes) != 2 {
+				t.Fatalf("seed %d compound step=%#v", test.seed, compound)
+			}
+			for index, want := range test.wantActions {
+				if got := compound.Turn.Plan.Actions[index].Intent.Action; got != want {
+					t.Fatalf("seed %d action %d = %q, want %q\nstep=%#v", test.seed, index, got, want, compound)
+				}
+				if got := compound.Turn.Result.Outcomes[index].Result.Outcome; got != test.wantOutcomes[index] {
+					t.Fatalf("seed %d outcome %d = %q, want %q\nstep=%#v", test.seed, index, got, test.wantOutcomes[index], compound)
+				}
+			}
+		})
+	}
+}
+
+func TestPrototypeWinningMessagesAreDeterministicAndDoNotMutatePhraseBank(t *testing.T) {
+	run := mustGeneratedRun(t, 47)
+	before := clonePhraseBank(PrototypePhrases)
+	first, err := PrototypeWinningMessages(run, 47)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := PrototypeWinningMessages(run, 47)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("messages differ for the same generated run and seed: first=%#v second=%#v", first, second)
+	}
+	if !reflect.DeepEqual(PrototypePhrases, before) {
+		t.Fatalf("phrase bank mutated: before=%#v after=%#v", before, PrototypePhrases)
+	}
+}
+
+func prototypeCompoundStep(t *testing.T, session Session) Step {
+	t.Helper()
+	for _, step := range session.Steps {
+		if strings.Contains(step.Player, " then ") {
+			return step
+		}
+	}
+	t.Fatalf("session has no compound step: %#v", session)
+	return Step{}
+}
+
+func clonePhraseBank(source PhraseBank) PhraseBank {
+	return PhraseBank{
+		Awareness:      append([]string(nil), source.Awareness...),
+		Search:         append([]string(nil), source.Search...),
+		TakeFlashlight: append([]string(nil), source.TakeFlashlight...),
+		MoveEast:       append([]string(nil), source.MoveEast...),
+		LightOn:        append([]string(nil), source.LightOn...),
+		TakeKey:        append([]string(nil), source.TakeKey...),
+		Unlock:         append([]string(nil), source.Unlock...),
+		MoveNorth:      append([]string(nil), source.MoveNorth...),
+	}
+}
+
+func placementKey(placements []rungen.Placement) string {
+	objects := make(map[game.ItemID]game.ObjectID, len(placements))
+	for _, placement := range placements {
+		objects[placement.ItemID] = placement.ObjectID
+	}
+	return fmt.Sprintf("flashlight=%s,key=%s", objects[scenario.ItemFlashlight], objects[scenario.ItemBrassKey])
+}
+
+func prototypePlacementKeys() map[string]bool {
+	keys := map[string]bool{}
+	for _, flashlightObjectID := range []game.ObjectID{
+		scenario.ObjectReceptionDesk,
+		scenario.ObjectReceptionFloor,
+		scenario.ObjectCollapsedChair,
+	} {
+		for _, keyObjectID := range []game.ObjectID{
+			scenario.ObjectBodyCabinet,
+			scenario.ObjectBodyDoor,
+			scenario.ObjectStorageCabinet,
+		} {
+			keys[placementKey([]rungen.Placement{
+				{ItemID: scenario.ItemFlashlight, ObjectID: flashlightObjectID},
+				{ItemID: scenario.ItemBrassKey, ObjectID: keyObjectID},
+			})] = true
+		}
+	}
+	return keys
+}
