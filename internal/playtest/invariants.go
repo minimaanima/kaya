@@ -91,6 +91,9 @@ func CheckTransition(def rungen.Definition, step Step) []Violation {
 	if !dueScheduledEventsConsumed(step.Before, step.After) {
 		violations = append(violations, Violation{Code: "scheduled_event_not_consumed", Detail: "a scheduled event due during the elapsed interval remains scheduled"})
 	}
+	if !dueScheduledEventsEmitted(step.Before, step.After, step.Turn.Result.Outcomes) {
+		violations = append(violations, Violation{Code: "scheduled_event_emission_mismatch", Detail: "emitted events do not match scheduled events due during the elapsed interval"})
+	}
 	return sortViolations(violations)
 }
 
@@ -107,7 +110,7 @@ func clarificationOrRefusal(result turn.Result) bool {
 }
 
 func takenItemMoved(outcome turn.ActionOutcome, before, after Snapshot) bool {
-	itemID, ok := targetedItemID(outcome, before.ItemNames)
+	itemID, ok := targetedItemID(outcome, before.ItemNames, before.ItemAliases)
 	if !ok {
 		return false
 	}
@@ -117,7 +120,7 @@ func takenItemMoved(outcome turn.ActionOutcome, before, after Snapshot) bool {
 		!objectContainsItem(after.ObjectItems, itemID)
 }
 
-func targetedItemID(outcome turn.ActionOutcome, itemNames map[game.ItemID]string) (game.ItemID, bool) {
+func targetedItemID(outcome turn.ActionOutcome, itemNames map[game.ItemID]string, itemAliases map[game.ItemID][]string) (game.ItemID, bool) {
 	target := outcome.Intent.Item
 	if target == "" {
 		target = outcome.Intent.Target
@@ -125,7 +128,7 @@ func targetedItemID(outcome turn.ActionOutcome, itemNames map[game.ItemID]string
 
 	var matched game.ItemID
 	for itemID, name := range itemNames {
-		if !world.MatchesTarget(target, name, nil) {
+		if !world.MatchesTarget(target, name, itemAliases[itemID]) {
 			continue
 		}
 		if matched != "" {
@@ -170,6 +173,31 @@ func containsTime(times []int, target int) bool {
 		}
 	}
 	return false
+}
+
+func dueScheduledEventsEmitted(before, after Snapshot, outcomes []turn.ActionOutcome) bool {
+	expected := make(map[game.WorldEvent]int)
+	for _, scheduled := range before.RemainingEvents {
+		if scheduled.TriggerAtSeconds > before.Time && scheduled.TriggerAtSeconds <= after.Time {
+			expected[scheduled.Event]++
+		}
+	}
+
+	emitted := make(map[game.WorldEvent]int)
+	for _, outcome := range outcomes {
+		for _, event := range outcome.Result.Events {
+			emitted[event]++
+		}
+	}
+	if len(expected) != len(emitted) {
+		return false
+	}
+	for event, expectedCount := range expected {
+		if emitted[event] != expectedCount {
+			return false
+		}
+	}
+	return true
 }
 
 func sortViolations(violations []Violation) []Violation {

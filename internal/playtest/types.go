@@ -13,10 +13,12 @@ type Snapshot struct {
 	Time                      int
 	Inventory, Discovered     []game.ItemID
 	ItemNames                 map[game.ItemID]string
+	ItemAliases               map[game.ItemID][]string
 	ObjectItems               map[game.ObjectID][]game.ItemID
 	ObjectRevealedItems       map[game.ObjectID][]game.ItemID
 	DoorStates                map[game.DoorID]world.DoorState
 	RemainingEventTimes       []int
+	RemainingEvents           []world.ScheduledEvent
 	ActiveLight               bool
 	Kaya                      kaya.State
 }

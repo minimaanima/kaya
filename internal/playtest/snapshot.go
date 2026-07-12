@@ -19,15 +19,18 @@ func Capture(state *world.State) Snapshot {
 		Inventory:           sortedPresentItems(state.Inventory),
 		Discovered:          sortedPresentItems(state.DiscoveredItems),
 		ItemNames:           make(map[game.ItemID]string, len(state.Items)),
+		ItemAliases:         make(map[game.ItemID][]string, len(state.Items)),
 		ObjectItems:         make(map[game.ObjectID][]game.ItemID, len(state.Objects)),
 		ObjectRevealedItems: make(map[game.ObjectID][]game.ItemID, len(state.Objects)),
 		DoorStates:          make(map[game.DoorID]world.DoorState, len(state.Doors)),
 		RemainingEventTimes: make([]int, 0, len(state.ScheduledEvents)),
+		RemainingEvents:     make([]world.ScheduledEvent, 0, len(state.ScheduledEvents)),
 		ActiveLight:         state.ActiveLight,
 		Kaya:                state.Kaya,
 	}
 	for itemID, item := range state.Items {
 		snapshot.ItemNames[itemID] = item.Name
+		snapshot.ItemAliases[itemID] = sortedStrings(item.Aliases)
 	}
 	for objectID, object := range state.Objects {
 		snapshot.ObjectItems[objectID] = sortedItemIDs(object.ContainedItems)
@@ -38,9 +41,29 @@ func Capture(state *world.State) Snapshot {
 	}
 	for _, event := range state.ScheduledEvents {
 		snapshot.RemainingEventTimes = append(snapshot.RemainingEventTimes, event.TriggerAtSeconds)
+		snapshot.RemainingEvents = append(snapshot.RemainingEvents, event)
 	}
 	sort.Ints(snapshot.RemainingEventTimes)
+	sort.Slice(snapshot.RemainingEvents, func(i, j int) bool {
+		left, right := snapshot.RemainingEvents[i], snapshot.RemainingEvents[j]
+		if left.TriggerAtSeconds != right.TriggerAtSeconds {
+			return left.TriggerAtSeconds < right.TriggerAtSeconds
+		}
+		if left.Event.Type != right.Event.Type {
+			return left.Event.Type < right.Event.Type
+		}
+		if left.Event.Description != right.Event.Description {
+			return left.Event.Description < right.Event.Description
+		}
+		return left.Event.Danger < right.Event.Danger
+	})
 	return snapshot
+}
+
+func sortedStrings(values []string) []string {
+	cloned := append([]string(nil), values...)
+	sort.Strings(cloned)
+	return cloned
 }
 
 func SameWorld(left, right Snapshot) bool {

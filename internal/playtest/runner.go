@@ -58,6 +58,9 @@ func (r *Runner) Step(ctx context.Context, message string) (Step, error) {
 		step.Violations = append(step.Violations, CheckTransition(r.definition, step)...)
 		step.Violations = sortViolations(step.Violations)
 		r.session.Steps = append(r.session.Steps, cloneStep(step))
+		if len(step.Violations) > 0 {
+			return step, fmt.Errorf("process turn invariant violation: %s: %w", violationCodes(step.Violations), err)
+		}
 		return step, fmt.Errorf("process turn: %w", err)
 	}
 	step.Turn = cloneProcessedTurn(processed)
@@ -122,6 +125,7 @@ func cloneSnapshot(value Snapshot) Snapshot {
 	for itemID, name := range value.ItemNames {
 		cloned.ItemNames[itemID] = name
 	}
+	cloned.ItemAliases = cloneItemAliases(value.ItemAliases)
 	cloned.ObjectItems = cloneObjectItems(value.ObjectItems)
 	cloned.ObjectRevealedItems = cloneObjectItems(value.ObjectRevealedItems)
 	cloned.DoorStates = make(map[game.DoorID]world.DoorState, len(value.DoorStates))
@@ -129,6 +133,15 @@ func cloneSnapshot(value Snapshot) Snapshot {
 		cloned.DoorStates[doorID] = state
 	}
 	cloned.RemainingEventTimes = append([]int(nil), value.RemainingEventTimes...)
+	cloned.RemainingEvents = append([]world.ScheduledEvent(nil), value.RemainingEvents...)
+	return cloned
+}
+
+func cloneItemAliases(value map[game.ItemID][]string) map[game.ItemID][]string {
+	cloned := make(map[game.ItemID][]string, len(value))
+	for itemID, aliases := range value {
+		cloned[itemID] = append([]string(nil), aliases...)
+	}
 	return cloned
 }
 

@@ -3,6 +3,7 @@ package playtest
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"kaya/internal/game"
@@ -32,6 +33,11 @@ func TestRunnerStepRecordsProcessTurnFailure(t *testing.T) {
 	}
 	if !hasViolation(step.Violations, "event_before_current_time") {
 		t.Fatalf("violations = %#v", step.Violations)
+	}
+	for _, violation := range step.Violations {
+		if !strings.Contains(err.Error(), violation.Code) {
+			t.Fatalf("error %q does not include violation %q", err, violation.Code)
+		}
 	}
 	session := runner.Session()
 	if len(session.Steps) != 1 || session.Steps[0].Error != want.Error() {
@@ -76,25 +82,53 @@ func TestCheckTransitionRejectsInvalidOutcomeChanges(t *testing.T) {
 }
 
 func TestCheckTransitionAllowsEqualPayloadEventsWhenDueTimesAreConsumed(t *testing.T) {
+	knock := game.WorldEvent{Type: game.EventSound, Description: "knock"}
+	later := game.WorldEvent{Type: game.EventSound, Description: "later"}
 	before := Capture(scenario.NewPrototypeWorld())
 	before.Time = 0
 	before.RemainingEventTimes = []int{5, 5, 10}
+	before.RemainingEvents = []world.ScheduledEvent{
+		{TriggerAtSeconds: 5, Event: knock},
+		{TriggerAtSeconds: 5, Event: knock},
+		{TriggerAtSeconds: 10, Event: later},
+	}
 	after := before
 	after.Time = 5
 	after.RemainingEventTimes = []int{10}
+	after.RemainingEvents = []world.ScheduledEvent{{TriggerAtSeconds: 10, Event: later}}
 	step := Step{
 		Before: before,
 		Turn: session.ProcessedTurn{
 			DurationSeconds: 5,
 			Result: turn.Result{Outcomes: []turn.ActionOutcome{{Result: game.ActionResult{Events: []game.WorldEvent{
-				{Type: game.EventSound, Description: "knock"},
-				{Type: game.EventSound, Description: "knock"},
+				knock,
+				knock,
 			}}}}},
 		},
 		After: after,
 	}
 	if violations := CheckTransition(runscenario.PrototypeDefinition(), step); len(violations) != 0 {
 		t.Fatalf("violations = %#v", violations)
+	}
+}
+
+func TestCheckTransitionRejectsConsumedDueEventWithoutEmission(t *testing.T) {
+	scheduled := game.WorldEvent{Type: game.EventSound, Description: "knock"}
+	before := Capture(scenario.NewPrototypeWorld())
+	before.Time = 0
+	before.RemainingEventTimes = []int{5}
+	before.RemainingEvents = []world.ScheduledEvent{{TriggerAtSeconds: 5, Event: scheduled}}
+	after := before
+	after.Time = 5
+	after.RemainingEventTimes = nil
+	after.RemainingEvents = nil
+	step := Step{
+		Before: before,
+		Turn:   session.ProcessedTurn{DurationSeconds: 5},
+		After:  after,
+	}
+	if !hasViolation(CheckTransition(runscenario.PrototypeDefinition(), step), "scheduled_event_emission_mismatch") {
+		t.Fatalf("violations = %#v", CheckTransition(runscenario.PrototypeDefinition(), step))
 	}
 }
 
@@ -134,6 +168,43 @@ func TestCheckTransitionRequiresTargetedItemToMove(t *testing.T) {
 	}
 	if !hasViolation(CheckTransition(runscenario.PrototypeDefinition(), step), "taken_item_not_removed") {
 		t.Fatalf("violations = %#v", CheckTransition(runscenario.PrototypeDefinition(), step))
+	}
+}
+
+func TestCheckTransitionAcceptsTakeItemAliases(t *testing.T) {
+	tests := []struct {
+		name     string
+		itemID   game.ItemID
+		objectID game.ObjectID
+		target   string
+	}{
+		{name: "flashlight torch", itemID: scenario.ItemFlashlight, objectID: scenario.ObjectReceptionDesk, target: "torch"},
+		{name: "brass key small key", itemID: scenario.ItemBrassKey, objectID: scenario.ObjectBodyCabinet, target: "small key"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			beforeState := scenario.NewPrototypeWorld()
+			before := Capture(beforeState)
+			afterState := scenario.NewPrototypeWorld()
+			afterState.AddInventory(test.itemID)
+			container := afterState.Objects[test.objectID]
+			container.ContainedItems = nil
+			afterState.Objects[container.ID] = container
+			after := Capture(afterState)
+
+			step := Step{
+				Before: before,
+				Turn: session.ProcessedTurn{Result: turn.Result{Outcomes: []turn.ActionOutcome{{
+					Intent: intent.Intent{Action: intent.ActionTakeItem, Target: test.target},
+					Result: game.ActionResult{Outcome: "item_taken"},
+				}}}},
+				After: after,
+			}
+			if violations := CheckTransition(runscenario.PrototypeDefinition(), step); len(violations) != 0 {
+				t.Fatalf("violations = %#v", violations)
+			}
+		})
 	}
 }
 
