@@ -281,7 +281,7 @@ func (r Resolver) takeItem(in intent.Intent) game.ActionResult {
 				return makeResult("item_already_taken", 1, "I already have "+item.Name+".")
 			}
 			if !r.state.IsItemDiscovered(itemID) {
-				return failed("item_not_discovered", "I have not found that yet.")
+				return failed("item_not_found", "I cannot find that item here.")
 			}
 			if !item.Portable {
 				return failed("item_not_portable", "I cannot put that in my bag.")

@@ -73,13 +73,14 @@ func (r *Runner) Step(ctx context.Context, message string) (Step, error) {
 
 	step.Violations = append(step.Violations, CheckState(r.run.State)...)
 	step.Violations = append(step.Violations, CheckTransition(r.definition, step)...)
+	step.Violations = append(step.Violations, CheckResponse(step, r.run.State)...)
 	if r.session.ObjectiveEmissions > 1 {
 		step.Violations = append(step.Violations, Violation{Code: "objective_emitted_multiple_times", Detail: "objective emitted more than once"})
 	}
 	step.Violations = sortViolations(step.Violations)
 	r.session.Steps = append(r.session.Steps, cloneStep(step))
 	if len(step.Violations) > 0 {
-		return step, fmt.Errorf("playtest invariant violation: %s", violationCodes(step.Violations))
+		return step, fmt.Errorf("playtest invariant violation: %s", violationDetails(step.Violations))
 	}
 	return step, nil
 }
@@ -196,4 +197,12 @@ func violationCodes(violations []Violation) string {
 		codes = append(codes, violation.Code)
 	}
 	return strings.Join(codes, ",")
+}
+
+func violationDetails(violations []Violation) string {
+	details := make([]string, 0, len(violations))
+	for _, violation := range violations {
+		details = append(details, fmt.Sprintf("%s: %s", violation.Code, violation.Detail))
+	}
+	return strings.Join(details, "; ")
 }

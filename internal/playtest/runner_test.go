@@ -8,12 +8,19 @@ import (
 
 	"kaya/internal/game"
 	"kaya/internal/intent"
+	"kaya/internal/response"
 	"kaya/internal/runscenario"
 	"kaya/internal/scenario"
 	"kaya/internal/session"
 	"kaya/internal/turn"
 	"kaya/internal/world"
 )
+
+type debugComposer struct{}
+
+func (debugComposer) Compose(_ context.Context, _ turn.FactBundle) response.Response {
+	return response.Response{Text: "debug: raw plan"}
+}
 
 func TestRunnerStepRecordsProcessTurnFailure(t *testing.T) {
 	want := errors.New("parser unavailable")
@@ -42,6 +49,26 @@ func TestRunnerStepRecordsProcessTurnFailure(t *testing.T) {
 	session := runner.Session()
 	if len(session.Steps) != 1 || session.Steps[0].Error != want.Error() {
 		t.Fatalf("session steps = %#v", session.Steps)
+	}
+}
+
+func TestRunnerStepStoresResponseViolationBeforeReturning(t *testing.T) {
+	generated := mustGeneratedRun(t, 1)
+	runner := NewRunner(runscenario.PrototypeDefinition(), generated, fallbackParser{}, debugComposer{})
+
+	step, err := runner.Step(context.Background(), "go east")
+	if err == nil {
+		t.Fatal("Step returned nil error for a debug response")
+	}
+	if !hasViolation(step.Violations, "response_debug_marker") {
+		t.Fatalf("step violations = %#v", step.Violations)
+	}
+	if !strings.Contains(err.Error(), "response_debug_marker") || !strings.Contains(err.Error(), "debug: raw plan") {
+		t.Fatalf("error = %q, want violation code and response text", err)
+	}
+	session := runner.Session()
+	if len(session.Steps) != 1 || !hasViolation(session.Steps[0].Violations, "response_debug_marker") {
+		t.Fatalf("stored session = %#v", session)
 	}
 }
 

@@ -162,14 +162,14 @@ func TestSearchDrawersFindsFlashlight(t *testing.T) {
 	}
 }
 
-func TestTakeItemRequiresDiscovery(t *testing.T) {
+func TestTakeItemBeforeDiscoveryDoesNotRevealItem(t *testing.T) {
 	state := scenario.NewPrototypeWorld()
 	resolver := NewResolver(state)
 
 	got := resolver.Resolve(intent.Intent{Action: intent.ActionTakeItem, Target: "flashlight"})
 
-	if got.Outcome != "item_not_discovered" {
-		t.Fatalf("Outcome = %q, want item_not_discovered", got.Outcome)
+	if got.Outcome != "item_not_found" {
+		t.Fatalf("Outcome = %q, want item_not_found", got.Outcome)
 	}
 	if state.HasItem(scenario.ItemFlashlight) {
 		t.Fatal("flashlight was added to inventory before discovery")
@@ -305,8 +305,8 @@ func TestTakeUndiscoveredNonPortableItemDoesNotLeakPortability(t *testing.T) {
 
 	got := resolver.Resolve(intent.Intent{Action: intent.ActionTakeItem, Target: "safe"})
 
-	if got.Outcome != "item_not_discovered" {
-		t.Fatalf("Outcome = %q, want item_not_discovered", got.Outcome)
+	if got.Outcome != "item_not_found" {
+		t.Fatalf("Outcome = %q, want item_not_found", got.Outcome)
 	}
 }
 
