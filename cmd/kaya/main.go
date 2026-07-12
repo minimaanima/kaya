@@ -23,6 +23,7 @@ import (
 	"kaya/internal/rungen"
 	"kaya/internal/runscenario"
 	"kaya/internal/scenario"
+	"kaya/internal/session"
 	"kaya/internal/turn"
 	"kaya/internal/world"
 )
@@ -178,37 +179,27 @@ type responseComposer interface {
 	Compose(context.Context, turn.FactBundle) response.Response
 }
 
-type processedTurn struct {
-	Plan     intent.TurnPlan
-	Result   turn.Result
-	Response response.Response
+type processedTurn = session.ProcessedTurn
+
+func processPlayerTurn(ctx context.Context, message string, state *world.State, parser turnParser, _ turn.Executor, composer responseComposer) (processedTurn, error) {
+	adapter := provenanceParser{parser: parser}
+	return session.ProcessTurn(ctx, message, state, adapter, composer)
 }
 
-func processPlayerTurn(ctx context.Context, message string, state *world.State, parser turnParser, executor turn.Executor, composer responseComposer) (processedTurn, error) {
-	snapshot, err := state.PerceptionSnapshot()
-	if err != nil {
-		return processedTurn{}, err
+type provenanceParser struct{ parser turnParser }
+
+func (p provenanceParser) ParseWithProvenance(ctx context.Context, message string, snapshot game.PerceptionSnapshot) (intent.TurnPlan, intent.ParseProvenance, error) {
+	if parser, ok := p.parser.(interface {
+		ParseWithProvenance(context.Context, string, game.PerceptionSnapshot) (intent.TurnPlan, intent.ParseProvenance, error)
+	}); ok {
+		return parser.ParseWithProvenance(ctx, message, snapshot)
 	}
-	parseCtx, cancelParse := context.WithTimeout(ctx, 60*time.Second)
-	plan, err := parser.Parse(parseCtx, message, snapshot)
-	cancelParse()
-	if err != nil {
-		return processedTurn{}, err
-	}
-	result := executor.Execute(plan)
-	bundle := result.FactBundle(message)
-	responseCtx, cancelResponse := context.WithTimeout(ctx, 60*time.Second)
-	composed := composer.Compose(responseCtx, bundle)
-	cancelResponse()
-	return processedTurn{Plan: plan, Result: result, Response: composed}, nil
+	plan, err := p.parser.Parse(ctx, message, snapshot)
+	return plan, intent.ParseProvenance{}, err
 }
 
 func resultDuration(result turn.Result) int {
-	total := 0
-	for _, outcome := range result.Outcomes {
-		total += outcome.Result.DurationSeconds
-	}
-	return total
+	return session.ResultDuration(result)
 }
 
 func runPlaytest() error {
