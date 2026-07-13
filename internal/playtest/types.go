@@ -32,6 +32,7 @@ type Step struct {
 	Number           int
 	Player           string
 	Before           Snapshot
+	Processed        bool
 	Turn             session.ProcessedTurn
 	After            Snapshot
 	ObjectiveEmitted bool

@@ -62,17 +62,22 @@ func TestComposerAcceptsApprovedEntitiesAdjacentToPunctuation(t *testing.T) {
 	}
 }
 
-func TestComposerAcceptsFactCitedNeutralParaphrase(t *testing.T) {
+func TestComposerRepairsNeutralParaphraseWithExactFactText(t *testing.T) {
 	bundle := turn.FactBundle{Facts: []game.Fact{
 		{ID: "f001", Kind: game.FactRoomDescription, Subject: "reception", Value: "A damaged reception area. The ceiling has split above the front desk.", Text: "A damaged reception area. The ceiling has split above the front desk.", Required: true},
 		{ID: "f002", Kind: game.FactVisibleObjects, Subject: "reception", Value: "Reception Desk, Reception Floor, Collapsed Chair", Text: "I can see: Reception Desk, Reception Floor, Collapsed Chair.", Required: true},
 		{ID: "f003", Kind: game.FactKnownExits, Subject: "reception", Value: "east", Text: "I can go: east.", Required: true},
 		{ID: "f004", Kind: game.FactElapsedTime, Subject: "time", Value: "5", Text: "5 seconds pass.", Required: true},
 	}}
-	gen := &fakeGenerator{raw: `{"sentences":[{"factIds":["f001"],"text":"I see a damaged reception area with the ceiling split above the front desk."},{"factIds":["f002"],"text":"My view includes the Reception Desk, Reception Floor, and Collapsed Chair."},{"factIds":["f003"],"text":"The only exit I can access is east."},{"factIds":["f004"],"text":"Five seconds have passed since my observation began."}]}`}
+	paraphrase := `{"sentences":[{"factIds":["f001"],"text":"I see a damaged reception area with the ceiling split above the front desk."},{"factIds":["f002"],"text":"My view includes the Reception Desk, Reception Floor, and Collapsed Chair."},{"factIds":["f003"],"text":"The only exit I can access is east."},{"factIds":["f004"],"text":"Five seconds have passed since my observation began."}]}`
+	exact := `{"sentences":[{"factIds":["f001"],"text":"A damaged reception area. The ceiling has split above the front desk."},{"factIds":["f002"],"text":"I can see: Reception Desk, Reception Floor, Collapsed Chair."},{"factIds":["f003"],"text":"I can go: east."},{"factIds":["f004"],"text":"5 seconds pass."}]}`
+	gen := &sequenceGenerator{responses: []generatedResponse{{raw: paraphrase}, {raw: exact}}}
 	got := NewComposer(gen).Compose(context.Background(), bundle)
-	if got.UsedFallback {
-		t.Fatalf("response = %#v, want accepted fact-cited neutral paraphrase", got)
+	if got.UsedFallback || !got.RepairAttempted || !got.RepairSucceeded || got.InitialValidationReason != "unsupported_claim" {
+		t.Fatalf("response = %#v, want exact fact-text repair after strict paraphrase rejection", got)
+	}
+	if len(gen.calls) != 2 {
+		t.Fatalf("generator calls = %#v, want exactly two", gen.calls)
 	}
 }
 
@@ -122,6 +127,56 @@ func TestComposerRejectsUnapprovedMovementClaim(t *testing.T) {
 	if !got.UsedFallback || got.FallbackReason != "unsupported_claim" {
 		t.Fatalf("response = %#v", got)
 	}
+}
+
+func TestComposerRejectsUnfoundedTakeClaim(t *testing.T) {
+	bundle := turn.FactBundle{Facts: []game.Fact{{
+		ID:       "f001",
+		Kind:     game.FactVisibleObjects,
+		Subject:  "reception",
+		Value:    "Flashlight",
+		Text:     "I can see: Flashlight.",
+		Required: true,
+	}}}
+	invalid := `{"sentences":[{"factIds":["f001"],"text":"I take Flashlight."}]}`
+	gen := &sequenceGenerator{responses: []generatedResponse{{raw: invalid}, {raw: invalid}}}
+
+	got := NewComposer(gen).Compose(context.Background(), bundle)
+	if !got.UsedFallback || got.FallbackReason != "unsupported_claim" || !got.RepairAttempted || got.RepairSucceeded || got.InitialValidationReason != "unsupported_claim" || got.RepairValidationReason != "unsupported_claim" {
+		t.Fatalf("response = %#v", got)
+	}
+	if len(gen.calls) != 2 {
+		t.Fatalf("generator calls = %#v, want exactly two", gen.calls)
+	}
+}
+
+func TestValidateDraftRejectsUnsupportedClaimContent(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		bundle  turn.FactBundle
+		factIDs []game.FactID
+		text    string
+	}{
+		{name: "invented sensory adjustment", bundle: doctorBundle(), factIDs: []game.FactID{"f001", "f002"}, text: "I searched Doctor Near Cabinet while I hold it steady and my eyes adjust to the dark. Doctor Near Cabinet is dead."},
+		{name: "invented movement", bundle: doctorBundle(), factIDs: []game.FactID{"f001", "f002"}, text: "Doctor Near Cabinet went to the cabinet. Doctor Near Cabinet is dead."},
+		{name: "invented take action", bundle: turn.FactBundle{Facts: []game.Fact{{ID: "f001", Kind: game.FactVisibleObjects, Subject: "reception", Value: "Flashlight", Text: "I can see: Flashlight.", Required: true}}}, factIDs: []game.FactID{"f001"}, text: "I take Flashlight."},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			raw := fmt.Sprintf(`{"sentences":[{"factIds":%s,"text":%q}]}`, mustJSON(t, test.factIDs), test.text)
+			if _, reason := validateDraft(raw, test.bundle); reason != "unsupported_claim" {
+				t.Fatalf("validation reason = %q, want unsupported_claim", reason)
+			}
+		})
+	}
+}
+
+func mustJSON(t *testing.T, value any) string {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal test JSON: %v", err)
+	}
+	return string(raw)
 }
 
 func TestComposerAcceptsNaturalGrammarAroundApprovedFacts(t *testing.T) {

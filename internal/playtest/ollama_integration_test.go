@@ -38,7 +38,7 @@ func TestLiveSliceEnabledRecognizesTruthyValues(t *testing.T) {
 
 func TestLiveProvenanceSummaryCountsResponseRepairs(t *testing.T) {
 	summary := liveProvenanceSummary{}
-	summary.record(Step{Turn: session.ProcessedTurn{
+	summary.record(Step{Processed: true, Turn: session.ProcessedTurn{
 		Provenance: intent.ParseProvenance{Source: intent.ParseSourceModel, HasRawPlan: true},
 		Response: response.Response{
 			RepairAttempted: true,
@@ -47,6 +47,37 @@ func TestLiveProvenanceSummaryCountsResponseRepairs(t *testing.T) {
 	}}, "repaired response")
 
 	if summary.ResponseRepairAttempts != 1 || summary.ResponseRepairSuccesses != 1 || summary.ResponseFallbacks != 0 || summary.ResponseGenerated != 1 {
+		t.Fatalf("live provenance = %#v", summary)
+	}
+}
+
+func TestLiveProvenanceSummarySkipsUnprocessedTurnCounters(t *testing.T) {
+	summary := liveProvenanceSummary{}
+	summary.record(Step{
+		Error: "parser unavailable",
+		Turn: session.ProcessedTurn{
+			Provenance: intent.ParseProvenance{Source: intent.ParseSourceRepair, HasRawPlan: true, Canonicalized: true},
+			Response:   response.Response{UsedFallback: true, RepairAttempted: true, RepairSucceeded: true},
+		},
+	}, "unprocessed response")
+
+	if summary.Turns != 1 || summary.GeneratorUsed != 0 || summary.Repaired != 0 || summary.Canonicalized != 0 || summary.RawPlans != 0 || summary.ResolvedPlans != 0 || summary.ParseFallbacks != 0 || summary.FallbackErrors != 0 || summary.ResponseGenerated != 0 || summary.ResponseFallbacks != 0 || summary.ResponseRepairAttempts != 0 || summary.ResponseRepairSuccesses != 0 || summary.LastResponseRaw != "" {
+		t.Fatalf("live provenance = %#v", summary)
+	}
+}
+
+func TestLiveProvenanceSummaryCountsProcessedInvariantStep(t *testing.T) {
+	summary := liveProvenanceSummary{}
+	summary.record(Step{
+		Processed:  true,
+		Violations: []Violation{{Code: "response_debug_marker", Detail: "debug response"}},
+		Turn: session.ProcessedTurn{
+			Provenance: intent.ParseProvenance{Source: intent.ParseSourceModel, HasRawPlan: true, Canonicalized: true},
+			Response:   response.Response{RepairAttempted: true, RepairSucceeded: true},
+		},
+	}, "processed response")
+
+	if summary.Turns != 1 || summary.GeneratorUsed != 1 || summary.Canonicalized != 1 || summary.RawPlans != 1 || summary.ResolvedPlans != 1 || summary.ResponseGenerated != 1 || summary.ResponseRepairAttempts != 1 || summary.ResponseRepairSuccesses != 1 {
 		t.Fatalf("live provenance = %#v", summary)
 	}
 }
@@ -141,6 +172,9 @@ type liveProvenanceSummary struct {
 
 func (s *liveProvenanceSummary) record(step Step, responseRaw string) {
 	s.Turns++
+	if !step.Processed {
+		return
+	}
 	provenance := step.Turn.Provenance
 	if provenance.Source == intent.ParseSourceModel || provenance.Source == intent.ParseSourceRepair {
 		s.GeneratorUsed++

@@ -63,6 +63,7 @@ func (r *Runner) Step(ctx context.Context, message string) (Step, error) {
 		}
 		return step, fmt.Errorf("process turn: %w", err)
 	}
+	step.Processed = true
 	step.Turn = cloneProcessedTurn(processed)
 	step.After = Capture(r.run.State)
 	step.ObjectiveEmitted = !r.objectiveCompleted && step.Before.CurrentRoom != r.definition.WinRoom && step.After.CurrentRoom == r.definition.WinRoom

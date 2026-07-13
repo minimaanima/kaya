@@ -21,12 +21,11 @@ var claimTokenPattern = regexp.MustCompile(`[\p{L}\p{N}]+(?:['’][\p{L}]+)?`)
 // fact field, keeping prose claims conservative and deterministic.
 var safeVoiceLexicon = func() map[string]bool {
 	words := strings.Fields(`a an the i me my we our you your it its this that these those they them their
-	here there’s there's now i'm i've they're they're
-is are was were be been being am can cannot could should have
-	no not yes and or but if then as so very still only just all both one first second
+	i'm i've they're
+is are was were be been being am can cannot could should
+	no not and or but if then as so
 	in on at by near beside next to from into of for with without around through inside outside
-	to feel along seconds second minute minutes view views include includes exit access take stand where
-	passed since arrival observation began observing space`)
+	to along`)
 	lexicon := make(map[string]bool, len(words))
 	for _, word := range words {
 		lexicon[word] = true

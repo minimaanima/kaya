@@ -35,6 +35,9 @@ func TestRunnerStepRecordsProcessTurnFailure(t *testing.T) {
 	if step.Error != want.Error() {
 		t.Fatalf("step error = %q, want %q", step.Error, want.Error())
 	}
+	if step.Processed {
+		t.Fatalf("process failure step was marked processed: %#v", step)
+	}
 	if !SameWorld(step.Before, step.After) || step.Before.Time != step.After.Time {
 		t.Fatalf("process failure changed snapshot: before=%#v after=%#v", step.Before, step.After)
 	}
@@ -63,11 +66,14 @@ func TestRunnerStepStoresResponseViolationBeforeReturning(t *testing.T) {
 	if !hasViolation(step.Violations, "response_debug_marker") {
 		t.Fatalf("step violations = %#v", step.Violations)
 	}
+	if !step.Processed {
+		t.Fatalf("processed invariant step was not marked processed: %#v", step)
+	}
 	if !strings.Contains(err.Error(), "response_debug_marker") || !strings.Contains(err.Error(), "debug: raw plan") {
 		t.Fatalf("error = %q, want violation code and response text", err)
 	}
 	session := runner.Session()
-	if len(session.Steps) != 1 || !hasViolation(session.Steps[0].Violations, "response_debug_marker") {
+	if len(session.Steps) != 1 || !hasViolation(session.Steps[0].Violations, "response_debug_marker") || !session.Steps[0].Processed {
 		t.Fatalf("stored session = %#v", session)
 	}
 }
