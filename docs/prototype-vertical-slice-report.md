@@ -64,7 +64,7 @@ $env:GOCACHE = Join-Path (Get-Location) '.gocache'
 go test ./internal/playtest -run TestOllamaPrototypeCompletePlaythroughs -v -count=1
 ```
 
-The initial run found a real validator defect: approved entities followed by punctuation were rejected as `unknown_entity`. `TestComposerAcceptsApprovedEntitiesAdjacentToPunctuation` was RED, then GREEN after punctuation-normalized whole-word matching. A second real defect rejected fact-cited neutral narration; `TestComposerAcceptsFactCitedNeutralParaphrase` was RED, then GREEN after narrowly extending the neutral voice lexicon. Existing unknown-entity, unknown-claim, predicate, and movement rejection tests remain green.
+The initial run found a real validator defect: approved entities followed by punctuation were rejected as `unknown_entity`. `TestComposerAcceptsApprovedEntitiesAdjacentToPunctuation` was RED, then GREEN after punctuation-normalized whole-word matching. An interim neutral-token lexicon expansion briefly accepted fact-cited paraphrase, but review removed that unsafe broad acceptance. Current behavior is strict: `TestComposerRepairsNeutralParaphraseWithExactFactText` proves the paraphrase is rejected first and then recovered only by the one-pass exact-text repair; `TestComposerRejectsUnfoundedTakeClaim` and direct validator regressions preserve the fact lock for invented state or action claims. Existing unknown-entity, unknown-claim, predicate, and movement rejection tests remain green.
 
 The final live run remains BLOCKED: 0/3 seed subtests passed, with observed wall time `30.9070275s`. All parser turns seen before failure used the generator with raw plans captured and zero parser fallback/provenance errors. The response validator correctly rejected additional prose not present in the facts, for example `while I hold it steady` and `my eyes adjust to the dark`; accepting such prose merely to suppress fallback would weaken the fact-locking acceptance criterion.
 
@@ -190,14 +190,14 @@ Manual response observations: `debug: unsupported_claim` appeared on multiple tu
 Fixed defects:
 
 - Punctuation-adjacent approved entity names no longer fail `unknown_entity`; regression: `TestComposerAcceptsApprovedEntitiesAdjacentToPunctuation`.
-- Fact-cited neutral narration no longer fails the strict lexicon; regression: `TestComposerAcceptsFactCitedNeutralParaphrase`.
+- Broad neutral-token acceptance was removed after review. `TestComposerRepairsNeutralParaphraseWithExactFactText` proves strict initial rejection plus one exact-text repair, while `TestComposerRejectsUnfoundedTakeClaim` and direct validator tests reject invented action/state prose.
 
 Recorded Minor findings:
 
 - Task 1: `provenanceParser` adapter provenance, deadline, and fact-bundle branches lack focused coverage.
 - Task 5: `MinInt64` and `MaxInt64` option parsing lacks direct coverage.
 - Live parser wording: `both doctors, please` and polite item suffixes can fail to normalize, while the concise remembered `both` and item name complete the route.
-- Live response wording: accepted drafts can be verbose, while rejected drafts expose ungrounded narration through fallback/debug output.
+- Live response wording: drafts that add uncited neutral-style narration are rejected under the fact lock; an exact-text one-pass repair may recover the required facts, while failed repair remains visible through fallback/debug output.
 
 Adversarial coverage included conversational chatter, typos (`isnide`, `cabiner`), interruption, repeated searches, doctor ambiguity with `both`, invalid moon/elevator suggestions, darkness, scheduled sound events, flashlight use, locked-door unlocking, time advancement, autonomy-visible clarification, and objective completion.
 

@@ -42,23 +42,35 @@ func RenderMarkdown(value Session) string {
 	for _, step := range value.Steps {
 		fmt.Fprintf(&b, "## Step %d\n\n", step.Number)
 		writeFencedSection(&b, "Player", step.Player)
+		fmt.Fprintf(&b, "Processed: `%t`\n\n", step.Processed)
 		writeSnapshot(&b, "Before", step.Before)
-		writePlan(&b, "Raw actions", step.Turn.Provenance.RawPlan, step.Turn.Provenance.HasRawPlan)
-		writePlan(&b, "Resolved actions", step.Turn.Plan, true)
-		writeProvenance(&b, step.Turn.Provenance)
-		fmt.Fprintf(&b, "Processed turn duration: `%d`\n\n", step.Turn.DurationSeconds)
-		writeResult(&b, step)
-		writeResponse(&b, step)
+		if step.Processed {
+			writePlan(&b, "Raw actions", step.Turn.Provenance.RawPlan, step.Turn.Provenance.HasRawPlan)
+			writePlan(&b, "Resolved actions", step.Turn.Plan, true)
+			writeProvenance(&b, step.Turn.Provenance)
+			fmt.Fprintf(&b, "Processed turn duration: `%d`\n\n", step.Turn.DurationSeconds)
+			writeResult(&b, step)
+			writeResponse(&b, step)
+		} else {
+			writeUnprocessedTurnEvidence(&b)
+		}
 		writeSnapshot(&b, "After", step.After)
 		writeStateDiff(&b, step.Before, step.After)
 		writeViolations(&b, step.Violations)
-		fmt.Fprintf(&b, "Objective emitted: `%t`\n\n", step.ObjectiveEmitted)
+		fmt.Fprintf(&b, "Objective emitted: `%t`\n\n", step.Processed && step.ObjectiveEmitted)
 		if step.Error != "" {
 			writeFencedSection(&b, "Error", step.Error)
 		}
 	}
 	fmt.Fprintf(&b, "## Objective emissions\n\nObjective emissions: `%d`\n", value.ObjectiveEmissions)
 	return b.String()
+}
+
+func writeUnprocessedTurnEvidence(b *strings.Builder) {
+	writePlan(b, "Raw actions", intent.TurnPlan{}, false)
+	writePlan(b, "Resolved actions", intent.TurnPlan{}, false)
+	b.WriteString("Result evidence:\n- unavailable\n\n")
+	b.WriteString("Response evidence:\n- unavailable\n\n")
 }
 
 func writePlan(b *strings.Builder, title string, plan intent.TurnPlan, present bool) {

@@ -34,9 +34,10 @@ func TestRenderMarkdownIncludesReproductionEvidence(t *testing.T) {
 		},
 		Steps: []Step{
 			{
-				Number: 1,
-				Player: "look around\n```\nnot a fence",
-				Before: before,
+				Number:    1,
+				Player:    "look around\n```\nnot a fence",
+				Before:    before,
+				Processed: true,
 				Turn: session.ProcessedTurn{
 					Plan: intent.TurnPlan{Actions: []intent.PlannedAction{{
 						Intent:     intent.Intent{Action: intent.ActionInspect, RawText: "look around"},
@@ -96,6 +97,8 @@ func TestRenderMarkdownIncludesReproductionEvidence(t *testing.T) {
 		"Seed: `42`",
 		"Flashlight",
 		"Player:\n",
+		"Processed: `true`",
+		"Processed: `false`",
 		"Raw actions:",
 		"Resolved actions:",
 		"Parse source:",
@@ -128,8 +131,56 @@ func TestRenderMarkdownIncludesReproductionEvidence(t *testing.T) {
 	if strings.Contains(got, "detail=\"first ``` violation\"") {
 		t.Fatalf("violation detail was rendered inline:\n%s", got)
 	}
-	if events := strings.Count(got, "Events:\n"); events != len(session.Steps) {
-		t.Fatalf("event sections = %d, want %d:\n%s", events, len(session.Steps), got)
+	if events := strings.Count(got, "Events:\n"); events != 1 {
+		t.Fatalf("event sections = %d, want 1 processed turn:\n%s", events, got)
+	}
+}
+
+func TestRenderMarkdownMarksUnprocessedTurnEvidenceUnavailable(t *testing.T) {
+	before := transcriptSnapshot()
+	after := transcriptSnapshot()
+	after.Time = before.Time + 1
+	step := Step{
+		Number:           1,
+		Player:           "go east",
+		Before:           before,
+		After:            after,
+		ObjectiveEmitted: true,
+		Violations:       []Violation{{Code: "event_before_current_time", Detail: "scheduled event is stale"}},
+		Error:            "parser unavailable",
+	}
+
+	got := RenderMarkdown(Session{Steps: []Step{step}})
+	for _, expected := range []string{
+		"Processed: `false`",
+		"Raw actions:\n- unavailable",
+		"Resolved actions:\n- unavailable",
+		"Result evidence:\n- unavailable",
+		"Response evidence:\n- unavailable",
+		"Before:",
+		"After:",
+		"State diff:",
+		"Violations:",
+		"parser unavailable",
+		"Objective emitted: `false`",
+		"Objective emissions: `0`",
+	} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("missing %q:\n%s", expected, got)
+		}
+	}
+	for _, unexpected := range []string{
+		"Parse source:",
+		"Processed turn duration:",
+		"Result metadata:",
+		"Response text:",
+		"Response metadata:",
+		"emotion=\"\"",
+		"Objective emitted: `true`",
+	} {
+		if strings.Contains(got, unexpected) {
+			t.Fatalf("unexpected unprocessed turn evidence %q:\n%s", unexpected, got)
+		}
 	}
 }
 
@@ -144,7 +195,8 @@ func TestRenderMarkdownIsStableAcrossMapIteration(t *testing.T) {
 
 func TestRenderMarkdownPreservesCompleteTurnEvidenceAndSemanticOrder(t *testing.T) {
 	step := Step{
-		Number: 1,
+		Number:    1,
+		Processed: true,
 		Turn: session.ProcessedTurn{
 			DurationSeconds: 17,
 			Plan: intent.TurnPlan{
@@ -213,6 +265,7 @@ func TestRenderMarkdownPreservesCompleteTurnEvidenceAndSemanticOrder(t *testing.
 
 	got := RenderMarkdown(Session{Steps: []Step{step}})
 	for _, expected := range []string{
+		"Processed: `true`",
 		"Processed turn duration: `17`",
 		"turn raw ``` text",
 		"intent raw ``` text",
