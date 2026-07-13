@@ -142,7 +142,7 @@ func TestComposerFallsBackOnGeneratorError(t *testing.T) {
 
 func TestComposerRepairsInvalidDraftIntoFactLockedResponse(t *testing.T) {
 	invalid := `{"sentences":[{"factIds":["f001","f002"],"text":"I searched Doctor Near Cabinet while I hold it steady and my eyes adjust to the dark. The doctor is dead."}]}`
-	valid := `{"sentences":[{"factIds":["f001","f002"],"text":"I searched Doctor Near Cabinet. The doctor is dead."}]}`
+	valid := `{"sentences":[{"factIds":["f001"],"text":"I searched Doctor Near Cabinet."},{"factIds":["f002"],"text":"Doctor Near Cabinet is dead."}]}`
 	gen := &sequenceGenerator{responses: []generatedResponse{{raw: invalid}, {raw: valid}}}
 
 	got := NewComposer(gen).Compose(context.Background(), doctorBundle())
@@ -158,12 +158,37 @@ func TestComposerRepairsInvalidDraftIntoFactLockedResponse(t *testing.T) {
 	var repairInput struct {
 		OriginalDraft    string `json:"originalDraft"`
 		ValidationReason string `json:"validationReason"`
+		RequiredFacts    []struct {
+			ID   game.FactID `json:"id"`
+			Text string      `json:"text"`
+		} `json:"requiredFacts"`
+		OptionalFacts []game.Fact `json:"optionalFacts"`
 	}
 	if err := json.Unmarshal([]byte(gen.calls[1].userPrompt), &repairInput); err != nil {
 		t.Fatalf("decode repair input: %v", err)
 	}
 	if repairInput.ValidationReason != "unsupported_claim" || repairInput.OriginalDraft != invalid {
 		t.Fatalf("repair input = %#v", repairInput)
+	}
+	if len(repairInput.RequiredFacts) != 2 ||
+		repairInput.RequiredFacts[0].ID != "f001" || repairInput.RequiredFacts[0].Text != "I searched Doctor Near Cabinet." ||
+		repairInput.RequiredFacts[1].ID != "f002" || repairInput.RequiredFacts[1].Text != "Doctor Near Cabinet is dead." ||
+		len(repairInput.OptionalFacts) != 0 {
+		t.Fatalf("repair facts = %#v optional=%#v", repairInput.RequiredFacts, repairInput.OptionalFacts)
+	}
+}
+
+func TestComposerFallsBackWhenRepairOmitsRequiredFact(t *testing.T) {
+	invalid := `{"sentences":[{"factIds":["f001","f002"],"text":"I searched Doctor Near Cabinet while I hold it steady. The doctor is dead."}]}`
+	omitted := `{"sentences":[{"factIds":["f001"],"text":"I searched Doctor Near Cabinet."}]}`
+	gen := &sequenceGenerator{responses: []generatedResponse{{raw: invalid}, {raw: omitted}}}
+
+	got := NewComposer(gen).Compose(context.Background(), doctorBundle())
+	if !got.UsedFallback || got.FallbackReason != "unsupported_claim" || !got.RepairAttempted || got.RepairSucceeded || got.InitialValidationReason != "unsupported_claim" || got.RepairValidationReason != "missing_required_fact" {
+		t.Fatalf("response provenance = %#v", got)
+	}
+	if len(gen.calls) != 2 {
+		t.Fatalf("generator calls = %#v, want two calls", gen.calls)
 	}
 }
 

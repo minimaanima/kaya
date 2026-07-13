@@ -253,3 +253,36 @@ Seed 10 and 11 repair draft excerpt, retained in the failing transcript:
 ```
 
 Seed 12 repair draft retained its required-fact schema but added uncited wording including `before I move east`, `fills my view`, and `while I feel uneasy`; strict validation rejected it. Every live failure printed the complete Markdown transcript with response repair provenance. Phase 8 remains BLOCKED.
+
+## Exact-Copy Repair Contract Update
+
+The one-pass repair contract was narrowed without changing the validator or model configuration. Repair input now exposes `requiredFacts` separately in original bundle order as exact `{id, text}` pairs, carries optional facts separately as context, and instructs the model to emit exactly one sentence per required fact, cite only that ID, and copy that text without additions or rephrasing.
+
+Focused RED/GREEN evidence:
+
+- `TestComposerRepairsInvalidDraftIntoFactLockedResponse` was RED because repair input lacked `requiredFacts`; it is GREEN with ordered exact ID/text assertions.
+- `TestComposerFallsBackWhenRepairOmitsRequiredFact` proves that an incomplete exact-copy repair remains deterministic fallback with `missing_required_fact` after exactly two total generator calls.
+- Existing repair-invalid tests continue to prove unsupported additions are rejected.
+
+Final live command:
+
+```powershell
+$env:KAYA_LIVE_SLICE_TESTS = '1'
+go test ./internal/playtest -run TestOllamaPrototypeCompletePlaythroughs -v -count=1
+```
+
+Result: BLOCKED after `1m53.5880495s`. Parser fallback/errors remained `0/0` for every seed.
+
+| Seed | Result | Response provenance |
+| --- | --- | --- |
+| 10 | BLOCKED at storage awareness: initial `unsupported_claim`, repair `missing_required_fact` | 6 turns; response generated/fallback `5/1`; repair attempts/successes `4/3` |
+| 11 | BLOCKED at the same storage-awareness step: initial `unsupported_claim`, repair `missing_required_fact` | 6 turns; response generated/fallback `5/1`; repair attempts/successes `4/3` |
+| 12 | PASS | 9 turns; response generated/fallback `9/0`; repair attempts/successes `6/6` |
+
+The exact seed-10 repaired JSON contained the three room facts but omitted the required elapsed-time fact:
+
+```json
+{"sentences":[{"factIds":["f001"],"text":"A pitch-black storage room with overturned cabinets and a chemical smell."},{"factIds":["f002"],"text":"I can see: Doctor Near Cabinet, Doctor Near Door, Storage Cabinet."},{"factIds":["f003"],"text":"I can go: west, north."}]}
+```
+
+The strict validator correctly rejected this with `missing_required_fact`. No retry, completion renderer, validator exemption, model change, or model-specific wording was added. Phase 8 remains BLOCKED.

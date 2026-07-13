@@ -273,7 +273,7 @@ Exit criteria:
 
 Status:
 
-Blocked pending live Ollama response certification. The hardened deterministic prototype, all nine generated placements, and manual routes complete. One generic response validate-and-repair attempt now resolves some invalid drafts, but the opt-in live gate still falls back when the single repair omits required facts or adds ungrounded prose.
+Blocked pending live Ollama response certification. The hardened deterministic prototype, all nine generated placements, and manual routes complete. One generic exact-copy response repair now completes seed 12, but seeds 10 and 11 still fall back when their single repair omits the required elapsed-time fact.
 
 Goal:
 
