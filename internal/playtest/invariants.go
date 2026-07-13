@@ -86,10 +86,14 @@ func CheckTransition(def rungen.Definition, step Step) []Violation {
 	for _, itemID := range step.Before.Discovered {
 		discovered[itemID] = true
 	}
-	light := step.Before.ActiveLight
-	roomID := step.Before.CurrentRoom
+	topology := def.Build()
+	location := outcomeLocation{
+		room:     step.Before.CurrentRoom,
+		previous: step.Before.PreviousRoom,
+		light:    step.Before.ActiveLight,
+	}
 	for _, outcome := range step.Turn.Result.Outcomes {
-		if isRoomAwarenessOutcome(outcome) && !awarenessMatchesLight(step.Before, roomID, light, outcome) {
+		if isRoomAwarenessOutcome(outcome) && !awarenessMatchesLight(step.Before, location.room, location.light, outcome) {
 			violations = append(violations, Violation{Code: "flashlight_perception_order_mismatch", Detail: "room awareness facts do not match light state at that outcome"})
 		}
 		if outcome.Intent.Action == intent.ActionSearch && outcome.Result.Outcome == "searched_found_items" {
@@ -119,15 +123,7 @@ func CheckTransition(def rungen.Definition, step Step) []Violation {
 		if outcome.Intent.Action == intent.ActionMove && outcome.Result.Outcome == "door_blocked" && step.After.CurrentRoom != step.Before.CurrentRoom {
 			violations = append(violations, Violation{Code: "locked_move_changed_room", Detail: "blocked door movement changed current room"})
 		}
-		if outcome.Result.Outcome == "moved" {
-			roomID = step.After.CurrentRoom
-		}
-		switch outcome.Result.Outcome {
-		case "flashlight_on":
-			light = true
-		case "flashlight_off":
-			light = false
-		}
+		location.advance(topology, outcome)
 	}
 	if !dueScheduledEventsConsumed(step.Before, step.After) {
 		violations = append(violations, Violation{Code: "scheduled_event_not_consumed", Detail: "a scheduled event due during the elapsed interval remains scheduled"})

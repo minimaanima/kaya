@@ -88,6 +88,10 @@ func leaksPitchBlackRoomAwareness(step Step, state *world.State) bool {
 	}
 	groups := outcomeFactIDGroups(step.Turn.Result)
 	hasSentenceEvidence := len(step.Turn.Response.Sentences) > 0
+	knownExitDirections := cloneKnownExitDirections(step.Before.KnownExitDirections)
+	if knownExitDirections == nil {
+		knownExitDirections = make(map[game.RoomID]map[string]bool)
+	}
 	location := outcomeLocation{
 		room:     step.Before.CurrentRoom,
 		previous: step.Before.PreviousRoom,
@@ -95,13 +99,14 @@ func leaksPitchBlackRoomAwareness(step Step, state *world.State) bool {
 	}
 	for index, outcome := range step.Turn.Result.Outcomes {
 		if isRoomAwarenessOutcome(outcome) {
+			mergeKnownExitFacts(knownExitDirections, location.room, outcome.Result.VisibleFacts)
 			if !hasSentenceEvidence {
-				if leaksPitchBlackRoomTerms(state, location.room, location.light, step.Turn.Response.Text) {
+				if leaksPitchBlackRoomTerms(state, location.room, location.light, knownExitDirections, step.Turn.Response.Text) {
 					return true
 				}
 			} else {
 				for _, sentence := range step.Turn.Response.Sentences {
-					if citesAny(sentence.FactIDs, groups[index]) && leaksPitchBlackRoomTerms(state, location.room, location.light, sentence.Text) {
+					if citesAny(sentence.FactIDs, groups[index]) && leaksPitchBlackRoomTerms(state, location.room, location.light, knownExitDirections, sentence.Text) {
 						return true
 					}
 				}
@@ -110,6 +115,23 @@ func leaksPitchBlackRoomAwareness(step Step, state *world.State) bool {
 		location.advance(state, outcome)
 	}
 	return false
+}
+
+func mergeKnownExitFacts(known map[game.RoomID]map[string]bool, roomID game.RoomID, facts []game.Fact) {
+	for _, fact := range facts {
+		if fact.Kind != game.FactKnownExits {
+			continue
+		}
+		if known[roomID] == nil {
+			known[roomID] = make(map[string]bool)
+		}
+		for _, direction := range strings.Split(fact.Value, ",") {
+			direction = strings.TrimSpace(direction)
+			if direction != "" {
+				known[roomID][direction] = true
+			}
+		}
+	}
 }
 
 func outcomeFactIDGroups(result turn.Result) [][]game.FactID {
@@ -207,7 +229,7 @@ func isRoomAwarenessOutcome(outcome turn.ActionOutcome) bool {
 	return (outcome.Intent.Action == intent.ActionInspect && strings.TrimSpace(outcome.Intent.Target) == "") || outcome.Result.Outcome == "inspected_room"
 }
 
-func leaksPitchBlackRoomTerms(state *world.State, roomID game.RoomID, activeLight bool, text string) bool {
+func leaksPitchBlackRoomTerms(state *world.State, roomID game.RoomID, activeLight bool, knownExitDirections map[game.RoomID]map[string]bool, text string) bool {
 	if activeLight {
 		return false
 	}
@@ -215,7 +237,7 @@ func leaksPitchBlackRoomTerms(state *world.State, roomID game.RoomID, activeLigh
 	if !ok || room.Visibility != world.VisibilityPitchBlack {
 		return false
 	}
-	for _, hiddenName := range hiddenRoomNamesAndDirections(state, room) {
+	for _, hiddenName := range hiddenRoomNamesAndDirections(state, room, knownExitDirections) {
 		if containsNormalizedName(text, hiddenName) {
 			return true
 		}
@@ -223,7 +245,7 @@ func leaksPitchBlackRoomTerms(state *world.State, roomID game.RoomID, activeLigh
 	return false
 }
 
-func hiddenRoomNamesAndDirections(state *world.State, room world.Room) []string {
+func hiddenRoomNamesAndDirections(state *world.State, room world.Room, knownExitDirections map[game.RoomID]map[string]bool) []string {
 	names := make([]string, 0, len(room.Objects)+len(room.Exits))
 	for _, objectID := range room.Objects {
 		if object, ok := state.Objects[objectID]; ok {
@@ -231,7 +253,7 @@ func hiddenRoomNamesAndDirections(state *world.State, room world.Room) []string 
 		}
 	}
 	for _, exit := range room.Exits {
-		if !state.KnownExitDirections[room.ID][exit.Direction] {
+		if !knownExitDirections[room.ID][exit.Direction] {
 			names = append(names, exit.Direction)
 		}
 	}

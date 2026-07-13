@@ -258,6 +258,25 @@ func TestCheckTransitionRejectsFlashlightPerceptionOrderMismatch(t *testing.T) {
 	}
 }
 
+func TestCheckTransitionTracksIntermediateRoomAcrossCompoundReturn(t *testing.T) {
+	generated := mustGeneratedRun(t, 1)
+	runner := NewRunner(runscenario.PrototypeDefinition(), generated, fallbackParser{}, fallbackComposer{})
+
+	step, err := runner.Step(context.Background(), "go east then look around then go west")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(step.Turn.Result.Outcomes) != 3 {
+		t.Fatalf("outcomes = %#v, want move, awareness, move", step.Turn.Result.Outcomes)
+	}
+	if step.After.CurrentRoom != scenario.RoomReception {
+		t.Fatalf("final room = %q, want starting room %q", step.After.CurrentRoom, scenario.RoomReception)
+	}
+	if hasViolation(step.Violations, "flashlight_perception_order_mismatch") {
+		t.Fatalf("intermediate storage awareness was attributed to the final room: %#v", step.Violations)
+	}
+}
+
 func TestCheckTransitionRejectsRediscoveredTakenItem(t *testing.T) {
 	state := scenario.NewPrototypeWorld()
 	state.DiscoverItems([]game.ItemID{scenario.ItemFlashlight})

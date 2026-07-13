@@ -154,6 +154,70 @@ func TestCheckResponseAttributesLitThenDarkAwarenessBySentenceEvidence(t *testin
 	}
 }
 
+func TestCheckResponseRejectsDarkDirectionLeakBeforeLaterLitAwareness(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	state.CurrentRoomID = scenario.RoomStorage
+	state.PreviousRoomID = scenario.RoomReception
+	if err := state.ObserveRoom(scenario.RoomStorage, scenario.RoomReception); err != nil {
+		t.Fatal(err)
+	}
+	before := Capture(state)
+	state.ActiveLight = true
+	if err := state.ObserveRoom(scenario.RoomStorage, ""); err != nil {
+		t.Fatal(err)
+	}
+	after := Capture(state)
+	result := turn.Result{Outcomes: []turn.ActionOutcome{
+		roomAwarenessWithVisibleAndExitFacts("none", "west"),
+		{Intent: intent.Intent{Action: intent.ActionTurnOn, Item: "flashlight"}, Result: game.ActionResult{Status: game.ActionSucceeded, Outcome: "flashlight_on", VisibleFacts: []game.Fact{{Kind: game.FactAction, Text: "I turn on the flashlight.", Required: true}}}},
+		roomAwarenessWithVisibleAndExitFacts("Storage Cabinet", "west, north"),
+	}}
+	reply := response.Response{
+		Text: "I can go north. I turn on the flashlight. I can go north.",
+		Sentences: []response.ResponseSentence{
+			{Text: "I can go north.", FactIDs: []game.FactID{"f002"}},
+			{Text: "I turn on the flashlight.", FactIDs: []game.FactID{"f003"}},
+			{Text: "I can go north.", FactIDs: []game.FactID{"f005"}},
+		},
+		UsedFactIDs: []game.FactID{"f002", "f003", "f005"},
+	}
+	step := Step{Player: "look around then turn on the flashlight then look around", Before: before, After: after, Turn: session.ProcessedTurn{Result: result, Response: reply}}
+
+	assertResponseViolation(t, CheckResponse(step, state), "response_darkness_leak")
+}
+
+func TestCheckResponseAllowsKnownLitDirectionAfterLightTurnsOff(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	state.CurrentRoomID = scenario.RoomStorage
+	state.PreviousRoomID = scenario.RoomReception
+	state.ActiveLight = true
+	if err := state.ObserveRoom(scenario.RoomStorage, ""); err != nil {
+		t.Fatal(err)
+	}
+	before := Capture(state)
+	state.ActiveLight = false
+	after := Capture(state)
+	result := turn.Result{Outcomes: []turn.ActionOutcome{
+		roomAwarenessWithVisibleAndExitFacts("Storage Cabinet", "west, north"),
+		{Intent: intent.Intent{Action: intent.ActionTurnOff, Item: "flashlight"}, Result: game.ActionResult{Status: game.ActionSucceeded, Outcome: "flashlight_off", VisibleFacts: []game.Fact{{Kind: game.FactAction, Text: "I turn off the flashlight.", Required: true}}}},
+		roomAwarenessWithVisibleAndExitFacts("none", "west, north"),
+	}}
+	reply := response.Response{
+		Text: "I can go north. I turn off the flashlight. I can still go north.",
+		Sentences: []response.ResponseSentence{
+			{Text: "I can go north.", FactIDs: []game.FactID{"f002"}},
+			{Text: "I turn off the flashlight.", FactIDs: []game.FactID{"f003"}},
+			{Text: "I can still go north.", FactIDs: []game.FactID{"f005"}},
+		},
+		UsedFactIDs: []game.FactID{"f002", "f003", "f005"},
+	}
+	step := Step{Player: "look around then turn off the flashlight then look around", Before: before, After: after, Turn: session.ProcessedTurn{Result: result, Response: reply}}
+
+	if violations := CheckResponse(step, state); hasViolation(violations, "response_darkness_leak") {
+		t.Fatalf("known direction was treated as hidden after light-off: %#v", violations)
+	}
+}
+
 func TestCheckResponseDoesNotExemptFallbackSentenceFromDarkness(t *testing.T) {
 	state := scenario.NewPrototypeWorld()
 	state.CurrentRoomID = scenario.RoomStorage
@@ -241,6 +305,24 @@ func roomAwarenessWithVisibleFact(value, text string) turn.ActionOutcome {
 			VisibleFacts: []game.Fact{{
 				Kind: game.FactVisibleObjects, Value: value, Text: text, Required: true,
 			}},
+		},
+	}
+}
+
+func roomAwarenessWithVisibleAndExitFacts(visibleObjects, knownExits string) turn.ActionOutcome {
+	visibleText := "I can see: " + visibleObjects + "."
+	if visibleObjects == "none" {
+		visibleText = "I cannot make out any distinct objects."
+	}
+	return turn.ActionOutcome{
+		Intent: intent.Intent{Action: intent.ActionInspect},
+		Result: game.ActionResult{
+			Status:  game.ActionSucceeded,
+			Outcome: "inspected_room",
+			VisibleFacts: []game.Fact{
+				{Kind: game.FactVisibleObjects, Value: visibleObjects, Text: visibleText, Required: true},
+				{Kind: game.FactKnownExits, Value: knownExits, Text: "I can go: " + knownExits + ".", Required: true},
+			},
 		},
 	}
 }
