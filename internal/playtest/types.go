@@ -16,7 +16,11 @@ type Snapshot struct {
 	ItemAliases               map[game.ItemID][]string
 	ObjectItems               map[game.ObjectID][]game.ItemID
 	ObjectRevealedItems       map[game.ObjectID][]game.ItemID
+	RoomVisibility            map[game.RoomID]world.Visibility
+	RoomObjects               map[game.RoomID][]game.ObjectID
 	DoorStates                map[game.DoorID]world.DoorState
+	DoorNames                 map[game.DoorID]string
+	DoorAliases               map[game.DoorID][]string
 	KnownExitDirections       map[game.RoomID]map[string]bool
 	RecentReferents           []game.ReferentGroup
 	ObservedObjectFacts       map[game.ObjectID]map[game.FactKind]game.Fact

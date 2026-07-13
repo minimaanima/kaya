@@ -3,6 +3,7 @@ package playtest
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -20,6 +21,95 @@ type debugComposer struct{}
 
 func (debugComposer) Compose(_ context.Context, _ turn.FactBundle) response.Response {
 	return response.Response{Text: "debug: raw plan"}
+}
+
+type gameplayMisreadingParser struct {
+	calls int
+}
+
+func (p *gameplayMisreadingParser) ParseWithProvenance(_ context.Context, message string, _ game.PerceptionSnapshot) (intent.TurnPlan, intent.ParseProvenance, error) {
+	p.calls++
+	plan := intent.TurnPlan{
+		Actions: []intent.PlannedAction{{
+			Intent:     intent.Intent{Action: intent.ActionWait, Confidence: 0.9, RawText: message, Modifiers: []string{}},
+			TargetMode: intent.TargetSingle,
+		}},
+		Confidence: 0.9,
+		RawText:    message,
+	}
+	return plan, intent.ParseProvenance{Source: intent.ParseSourceModel, RawPlan: plan, HasRawPlan: true}, nil
+}
+
+func TestRunnerPureConversationBypassesParserWithoutChangingWorld(t *testing.T) {
+	for _, message := range []string{
+		"hello",
+		"hello, are you still with me?",
+		"thank you",
+		"okay",
+	} {
+		t.Run(message, func(t *testing.T) {
+			generated := mustGeneratedRun(t, 1)
+			generated.State.Kaya.HasDoubt = true
+			generated.State.ScheduledEvents = append([]world.ScheduledEvent{{
+				TriggerAtSeconds: 1,
+				Event:            game.WorldEvent{Type: game.EventSound, Description: "too soon"},
+			}}, generated.State.ScheduledEvents...)
+			parser := &gameplayMisreadingParser{}
+			runner := NewRunner(runscenario.PrototypeDefinition(), generated, parser, fallbackComposer{})
+			before := Capture(runner.State())
+
+			step, err := runner.Step(context.Background(), message)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if parser.calls != 0 {
+				t.Fatalf("parser calls = %d, want 0", parser.calls)
+			}
+			if step.Turn.DurationSeconds != 0 || step.After.Time != step.Before.Time {
+				t.Fatalf("conversation advanced time: duration=%d before=%d after=%d", step.Turn.DurationSeconds, step.Before.Time, step.After.Time)
+			}
+			if len(step.Turn.Result.Outcomes) != 1 || step.Turn.Result.Outcomes[0].Result.Outcome != "talked" {
+				t.Fatalf("outcomes = %#v, want one talked outcome", step.Turn.Result.Outcomes)
+			}
+			if !reflect.DeepEqual(before, step.After) {
+				t.Fatalf("conversation changed world:\nbefore=%#v\nafter=%#v", before, step.After)
+			}
+		})
+	}
+}
+
+func TestRunnerInventoryQuestionDoesNotAdvanceTimeOrFireEvents(t *testing.T) {
+	generated := mustGeneratedRun(t, 1)
+	generated.State.ScheduledEvents = append([]world.ScheduledEvent{{
+		TriggerAtSeconds: 1,
+		Event:            game.WorldEvent{Type: game.EventSound, Description: "too soon"},
+	}}, generated.State.ScheduledEvents...)
+	runner := NewRunner(runscenario.PrototypeDefinition(), generated, fallbackParser{}, fallbackComposer{})
+	before := Capture(runner.State())
+
+	step, err := runner.Step(context.Background(), "what are you carrying?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.Turn.DurationSeconds != 0 || step.After.Time != step.Before.Time {
+		t.Fatalf("inventory question advanced time: duration=%d before=%d after=%d", step.Turn.DurationSeconds, step.Before.Time, step.After.Time)
+	}
+	if !reflect.DeepEqual(before, step.After) {
+		t.Fatalf("inventory question changed world:\nbefore=%#v\nafter=%#v", before, step.After)
+	}
+}
+
+func TestRunnerGreetingPrefixedCommandStillExecutes(t *testing.T) {
+	generated := mustGeneratedRun(t, 1)
+	runner := NewRunner(runscenario.PrototypeDefinition(), generated, fallbackParser{}, fallbackComposer{})
+
+	step, err := runner.Step(context.Background(), "hello, go east")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.After.CurrentRoom != scenario.RoomStorage || step.Turn.DurationSeconds != 20 {
+		t.Fatalf("greeting-prefixed command did not execute: %#v", step)
+	}
 }
 
 func TestRunnerStepRecordsProcessTurnFailure(t *testing.T) {
@@ -100,6 +190,25 @@ func TestRunnerSessionClonesConversationSnapshots(t *testing.T) {
 	again := runner.Session().Steps[0].Before
 	if !again.KnownExitDirections[scenario.RoomReception]["east"] || again.RecentReferents[0].ItemIDs[0] != scenario.ItemFlashlight || again.ObservedObjectFacts[scenario.ObjectReceptionDesk][game.FactRoomDescription].Text != "before" || again.LastMentionedItemIDs[0] != scenario.ItemFlashlight {
 		t.Fatalf("runner session snapshot was aliased: %#v", again)
+	}
+}
+
+func TestCloneResponseDeepCopiesSentenceEvidence(t *testing.T) {
+	original := response.Response{
+		Text: "first second",
+		Sentences: []response.ResponseSentence{
+			{Text: "first", FactIDs: []game.FactID{"f001"}},
+			{Text: "second", FactIDs: []game.FactID{"f002"}},
+		},
+	}
+	cloned := cloneResponse(original)
+	if !reflect.DeepEqual(cloned, original) {
+		t.Fatalf("clone = %#v, want %#v", cloned, original)
+	}
+	cloned.Sentences[0].Text = "changed"
+	cloned.Sentences[0].FactIDs[0] = "changed"
+	if original.Sentences[0].Text != "first" || original.Sentences[0].FactIDs[0] != "f001" {
+		t.Fatalf("original response evidence was aliased: %#v", original.Sentences)
 	}
 }
 
@@ -243,8 +352,10 @@ func TestCheckTransitionAcceptsTakeItemAliases(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			beforeState := scenario.NewPrototypeWorld()
+			beforeState.DiscoverItems([]game.ItemID{test.itemID})
 			before := Capture(beforeState)
 			afterState := scenario.NewPrototypeWorld()
+			afterState.DiscoverItems([]game.ItemID{test.itemID})
 			afterState.AddInventory(test.itemID)
 			container := afterState.Objects[test.objectID]
 			container.ContainedItems = nil

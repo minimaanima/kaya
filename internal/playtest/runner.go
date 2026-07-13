@@ -130,10 +130,20 @@ func cloneSnapshot(value Snapshot) Snapshot {
 	cloned.ItemAliases = cloneItemAliases(value.ItemAliases)
 	cloned.ObjectItems = cloneObjectItems(value.ObjectItems)
 	cloned.ObjectRevealedItems = cloneObjectItems(value.ObjectRevealedItems)
+	cloned.RoomVisibility = make(map[game.RoomID]world.Visibility, len(value.RoomVisibility))
+	for roomID, visibility := range value.RoomVisibility {
+		cloned.RoomVisibility[roomID] = visibility
+	}
+	cloned.RoomObjects = cloneRoomObjects(value.RoomObjects)
 	cloned.DoorStates = make(map[game.DoorID]world.DoorState, len(value.DoorStates))
 	for doorID, state := range value.DoorStates {
 		cloned.DoorStates[doorID] = state
 	}
+	cloned.DoorNames = make(map[game.DoorID]string, len(value.DoorNames))
+	for doorID, name := range value.DoorNames {
+		cloned.DoorNames[doorID] = name
+	}
+	cloned.DoorAliases = cloneDoorAliases(value.DoorAliases)
 	cloned.KnownExitDirections = cloneKnownExitDirections(value.KnownExitDirections)
 	cloned.RecentReferents = cloneReferentGroups(value.RecentReferents)
 	cloned.ObservedObjectFacts = cloneObservedObjectFacts(value.ObservedObjectFacts)
@@ -155,6 +165,22 @@ func cloneObjectItems(value map[game.ObjectID][]game.ItemID) map[game.ObjectID][
 	cloned := make(map[game.ObjectID][]game.ItemID, len(value))
 	for objectID, itemIDs := range value {
 		cloned[objectID] = append([]game.ItemID(nil), itemIDs...)
+	}
+	return cloned
+}
+
+func cloneRoomObjects(value map[game.RoomID][]game.ObjectID) map[game.RoomID][]game.ObjectID {
+	cloned := make(map[game.RoomID][]game.ObjectID, len(value))
+	for roomID, objectIDs := range value {
+		cloned[roomID] = append([]game.ObjectID(nil), objectIDs...)
+	}
+	return cloned
+}
+
+func cloneDoorAliases(value map[game.DoorID][]string) map[game.DoorID][]string {
+	cloned := make(map[game.DoorID][]string, len(value))
+	for doorID, aliases := range value {
+		cloned[doorID] = append([]string(nil), aliases...)
 	}
 	return cloned
 }
@@ -193,6 +219,13 @@ func cloneResult(value turn.Result) turn.Result {
 func cloneResponse(value response.Response) response.Response {
 	cloned := value
 	cloned.UsedFactIDs = append([]game.FactID(nil), value.UsedFactIDs...)
+	cloned.Sentences = make([]response.ResponseSentence, len(value.Sentences))
+	for index, sentence := range value.Sentences {
+		cloned.Sentences[index] = response.ResponseSentence{
+			Text:    sentence.Text,
+			FactIDs: append([]game.FactID(nil), sentence.FactIDs...),
+		}
+	}
 	return cloned
 }
 

@@ -61,7 +61,7 @@ func TestLiveProvenanceSummarySkipsUnprocessedTurnCounters(t *testing.T) {
 		},
 	}, "unprocessed response")
 
-	if summary.Turns != 1 || summary.GeneratorUsed != 0 || summary.Repaired != 0 || summary.Canonicalized != 0 || summary.RawPlans != 0 || summary.ResolvedPlans != 0 || summary.ParseFallbacks != 0 || summary.FallbackErrors != 0 || summary.ResponseGenerated != 0 || summary.ResponseFallbacks != 0 || summary.ResponseRepairAttempts != 0 || summary.ResponseRepairSuccesses != 0 || summary.LastResponseRaw != "" {
+	if summary.Turns != 1 || summary.ProcessedTurns != 0 || summary.GeneratorUsed != 0 || summary.Repaired != 0 || summary.Canonicalized != 0 || summary.RawPlans != 0 || summary.ResolvedPlans != 0 || summary.ParseFallbacks != 0 || summary.FallbackErrors != 0 || summary.ResponseGenerated != 0 || summary.ResponseFallbacks != 0 || summary.ResponseRepairAttempts != 0 || summary.ResponseRepairSuccesses != 0 || summary.LastResponseRaw != "" {
 		t.Fatalf("live provenance = %#v", summary)
 	}
 }
@@ -77,8 +77,68 @@ func TestLiveProvenanceSummaryCountsProcessedInvariantStep(t *testing.T) {
 		},
 	}, "processed response")
 
-	if summary.Turns != 1 || summary.GeneratorUsed != 1 || summary.Canonicalized != 1 || summary.RawPlans != 1 || summary.ResolvedPlans != 1 || summary.ResponseGenerated != 1 || summary.ResponseRepairAttempts != 1 || summary.ResponseRepairSuccesses != 1 {
+	if summary.Turns != 1 || summary.ProcessedTurns != 1 || summary.GeneratorUsed != 1 || summary.Canonicalized != 1 || summary.RawPlans != 1 || summary.ResolvedPlans != 1 || summary.ResponseGenerated != 1 || summary.ResponseRepairAttempts != 1 || summary.ResponseRepairSuccesses != 1 {
 		t.Fatalf("live provenance = %#v", summary)
+	}
+}
+
+func TestLiveProvenanceSummaryRejectsUnknownSourceAndMissingRawPlan(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		provenance intent.ParseProvenance
+	}{
+		{name: "empty source", provenance: intent.ParseProvenance{HasRawPlan: true}},
+		{name: "unknown source", provenance: intent.ParseProvenance{Source: intent.ParseSource("unknown"), HasRawPlan: true}},
+		{name: "missing raw plan", provenance: intent.ParseProvenance{Source: intent.ParseSourceModel}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			step := Step{Processed: true, Turn: session.ProcessedTurn{Provenance: test.provenance}}
+			summary := liveProvenanceSummary{}
+			summary.record(step, "")
+			if reason := summary.lastTurnFailure(step); reason == "" {
+				t.Fatal("lastTurnFailure accepted incomplete parser provenance")
+			}
+			if reason := summary.acceptanceFailure(1); reason == "" {
+				t.Fatalf("acceptanceFailure accepted summary %#v", summary)
+			}
+		})
+	}
+}
+
+func TestLiveProvenanceSummaryFinalAcceptanceRequiresExactCounts(t *testing.T) {
+	validStep := Step{Processed: true, Turn: session.ProcessedTurn{
+		Provenance: intent.ParseProvenance{Source: intent.ParseSourceModel, HasRawPlan: true},
+	}}
+	valid := liveProvenanceSummary{}
+	valid.record(validStep, "")
+	if reason := valid.acceptanceFailure(1); reason != "" {
+		t.Fatalf("complete summary rejected: %s; summary=%#v", reason, valid)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*liveProvenanceSummary)
+	}{
+		{name: "expected processed turns", mutate: func(s *liveProvenanceSummary) { s.ProcessedTurns = 0 }},
+		{name: "model or repair source", mutate: func(s *liveProvenanceSummary) { s.GeneratorUsed = 0 }},
+		{name: "raw plans", mutate: func(s *liveProvenanceSummary) { s.RawPlans = 0 }},
+		{name: "resolved plans", mutate: func(s *liveProvenanceSummary) { s.ResolvedPlans = 0 }},
+		{name: "generated responses", mutate: func(s *liveProvenanceSummary) { s.ResponseGenerated = 0 }},
+		{name: "parse fallback", mutate: func(s *liveProvenanceSummary) { s.ParseFallbacks = 1 }},
+		{name: "fallback error", mutate: func(s *liveProvenanceSummary) { s.FallbackErrors = 1 }},
+		{name: "response fallback", mutate: func(s *liveProvenanceSummary) { s.ResponseFallbacks = 1 }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			summary := valid
+			test.mutate(&summary)
+			if reason := summary.acceptanceFailure(1); reason == "" {
+				t.Fatalf("acceptanceFailure accepted mismatched summary %#v", summary)
+			}
+		})
+	}
+	if reason := valid.acceptanceFailure(2); reason == "" {
+		t.Fatalf("acceptanceFailure accepted one processed turn when two were required: %#v", valid)
 	}
 }
 
@@ -133,6 +193,9 @@ func TestOllamaPrototypeCompletePlaythroughs(t *testing.T) {
 			if session.ObjectiveEmissions != 1 {
 				failLiveSession(t, runner, summary, "seed %d objective emissions = %d, want 1", seed, session.ObjectiveEmissions)
 			}
+			if reason := summary.acceptanceFailure(len(messages)); reason != "" {
+				failLiveSession(t, runner, summary, "seed %d incomplete live provenance: %s", seed, reason)
+			}
 			t.Logf("seed %d live provenance: %s", seed, summary)
 		})
 	}
@@ -156,6 +219,7 @@ func liveEnvOrDefault(name, fallback string) string {
 
 type liveProvenanceSummary struct {
 	Turns                   int
+	ProcessedTurns          int
 	GeneratorUsed           int
 	Repaired                int
 	Canonicalized           int
@@ -175,6 +239,7 @@ func (s *liveProvenanceSummary) record(step Step, responseRaw string) {
 	if !step.Processed {
 		return
 	}
+	s.ProcessedTurns++
 	provenance := step.Turn.Provenance
 	if provenance.Source == intent.ParseSourceModel || provenance.Source == intent.ParseSourceRepair {
 		s.GeneratorUsed++
@@ -211,8 +276,11 @@ func (s *liveProvenanceSummary) record(step Step, responseRaw string) {
 
 func (s liveProvenanceSummary) lastTurnFailure(step Step) string {
 	provenance := step.Turn.Provenance
-	if provenance.Source == intent.ParseSourceFallback {
-		return "intent parser used deterministic fallback"
+	if provenance.Source != intent.ParseSourceModel && provenance.Source != intent.ParseSourceRepair {
+		return fmt.Sprintf("intent parser source is not model or repair: %q", provenance.Source)
+	}
+	if !provenance.HasRawPlan {
+		return "intent parser did not capture a raw plan"
 	}
 	if provenance.FallbackError != nil {
 		return fmt.Sprintf("intent parser fallback/provenance error: %v", provenance.FallbackError)
@@ -223,10 +291,45 @@ func (s liveProvenanceSummary) lastTurnFailure(step Step) string {
 	return ""
 }
 
+func (s liveProvenanceSummary) acceptanceFailure(expectedProcessed int) string {
+	if s.Turns != expectedProcessed {
+		return fmt.Sprintf("attempted turns=%d, want %d", s.Turns, expectedProcessed)
+	}
+	if s.ProcessedTurns != expectedProcessed {
+		return fmt.Sprintf("processed turns=%d, want %d", s.ProcessedTurns, expectedProcessed)
+	}
+	if s.GeneratorUsed != s.ProcessedTurns {
+		return fmt.Sprintf("model/repair sources=%d, want processed turns %d", s.GeneratorUsed, s.ProcessedTurns)
+	}
+	if s.RawPlans != s.ProcessedTurns {
+		return fmt.Sprintf("raw plans=%d, want processed turns %d", s.RawPlans, s.ProcessedTurns)
+	}
+	if s.ResolvedPlans != s.ProcessedTurns {
+		return fmt.Sprintf("resolved plans=%d, want processed turns %d", s.ResolvedPlans, s.ProcessedTurns)
+	}
+	if s.ParseFallbacks != 0 || s.FallbackErrors != 0 {
+		return fmt.Sprintf("parse fallbacks/errors=%d/%d, want 0/0", s.ParseFallbacks, s.FallbackErrors)
+	}
+	if s.ResponseGenerated != s.ProcessedTurns {
+		return fmt.Sprintf("generated responses=%d, want processed turns %d", s.ResponseGenerated, s.ProcessedTurns)
+	}
+	if s.ResponseFallbacks != 0 {
+		return fmt.Sprintf("response fallbacks=%d, want 0", s.ResponseFallbacks)
+	}
+	if s.ResponseRepairAttempts != s.ResponseRepairSuccesses {
+		return fmt.Sprintf("response repair attempts/successes=%d/%d, want equality", s.ResponseRepairAttempts, s.ResponseRepairSuccesses)
+	}
+	if s.LastResponseRaw != "" {
+		return "last fallback response raw output is non-empty"
+	}
+	return ""
+}
+
 func (s liveProvenanceSummary) String() string {
 	return fmt.Sprintf(
-		"turns=%d generator_used=%d repaired=%d canonicalized=%d raw_plans=%d resolved_plans=%d parse_fallbacks=%d fallback_errors=%d response_generated=%d response_fallbacks=%d response_repair_attempts=%d response_repair_successes=%d last_response_raw=%q",
+		"turns=%d processed_turns=%d generator_used=%d repaired=%d canonicalized=%d raw_plans=%d resolved_plans=%d parse_fallbacks=%d fallback_errors=%d response_generated=%d response_fallbacks=%d response_repair_attempts=%d response_repair_successes=%d last_response_raw=%q",
 		s.Turns,
+		s.ProcessedTurns,
 		s.GeneratorUsed,
 		s.Repaired,
 		s.Canonicalized,

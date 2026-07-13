@@ -51,26 +51,29 @@ func validateDraft(raw string, bundle turn.FactBundle) (ResponseDraft, string) {
 		return ResponseDraft{}, "invalid_draft"
 	}
 	total := 0
-	known := make(map[game.FactID]bool, len(bundle.Facts))
+	known := make(map[game.FactID]game.Fact, len(bundle.Facts))
 	required := make(map[game.FactID]bool)
 	for _, fact := range bundle.Facts {
-		known[fact.ID] = true
+		known[fact.ID] = fact
 		if fact.Required {
 			required[fact.ID] = true
 		}
 	}
 	covered := make(map[game.FactID]bool)
-	for _, sentence := range draft.Sentences {
+	citedFacts := make([][]game.Fact, len(draft.Sentences))
+	for index, sentence := range draft.Sentences {
 		text := strings.TrimSpace(sentence.Text)
 		if len(sentence.FactIDs) == 0 || text == "" || utf8.RuneCountInString(text) > 300 {
 			return ResponseDraft{}, "invalid_draft"
 		}
 		total += utf8.RuneCountInString(text)
 		for _, id := range sentence.FactIDs {
-			if !known[id] {
+			fact, ok := known[id]
+			if !ok {
 				return ResponseDraft{}, "unknown_fact_id"
 			}
 			covered[id] = true
+			citedFacts[index] = append(citedFacts[index], fact)
 		}
 	}
 	if total > 900 {
@@ -81,60 +84,58 @@ func validateDraft(raw string, bundle turn.FactBundle) (ResponseDraft, string) {
 			return ResponseDraft{}, "missing_required_fact"
 		}
 	}
-	if hasUnknownEntity(draft, bundle) {
-		return ResponseDraft{}, "unknown_entity"
-	}
-	if hasUnsupportedClaim(draft, bundle) {
-		return ResponseDraft{}, "unsupported_claim"
+	for index, sentence := range draft.Sentences {
+		if hasUnknownEntity(sentence.Text, citedFacts[index]) {
+			return ResponseDraft{}, "unknown_entity"
+		}
+		if hasUnsupportedClaim(sentence.Text, citedFacts[index]) {
+			return ResponseDraft{}, "unsupported_claim"
+		}
 	}
 	return draft, ""
 }
 
-func hasUnknownEntity(draft ResponseDraft, bundle turn.FactBundle) bool {
-	approved := make([]string, 0, len(bundle.Facts)*3)
-	for _, fact := range bundle.Facts {
+func hasUnknownEntity(text string, facts []game.Fact) bool {
+	approved := make([]string, 0, len(facts)*3)
+	for _, fact := range facts {
 		approved = append(approved, fact.Subject, fact.Value, fact.Text)
 	}
-	for _, sentence := range draft.Sentences {
-		for _, candidate := range entityRunPattern.FindAllString(sentence.Text, -1) {
-			if !approvedEntity(candidate, approved) {
-				return true
-			}
+	for _, candidate := range entityRunPattern.FindAllString(text, -1) {
+		if !approvedEntity(candidate, approved) {
+			return true
 		}
 	}
 	return false
 }
 
-func hasUnsupportedClaim(draft ResponseDraft, bundle turn.FactBundle) bool {
-	approved := make(map[string]bool, len(bundle.Facts)*8)
-	approvedNumbers := approvedNumberValues(bundle)
-	for _, fact := range bundle.Facts {
+func hasUnsupportedClaim(text string, facts []game.Fact) bool {
+	approved := make(map[string]bool, len(facts)*8)
+	approvedNumbers := approvedNumberValues(facts)
+	for _, fact := range facts {
 		for _, field := range []string{fact.Subject, fact.Value, fact.Text} {
 			for _, token := range claimTokenPattern.FindAllString(strings.ToLower(field), -1) {
 				approved[token] = true
 			}
 		}
 	}
-	for _, sentence := range draft.Sentences {
-		tokens := claimTokenPattern.FindAllString(strings.ToLower(sentence.Text), -1)
-		for index := 0; index < len(tokens); {
-			if number, width, ok := parseNumberWords(tokens[index:]); ok && approvedNumbers[number] {
-				index += width
-				continue
-			}
-			token := tokens[index]
-			if !approved[token] && !safeVoiceLexicon[token] {
-				return true
-			}
-			index++
+	tokens := claimTokenPattern.FindAllString(strings.ToLower(text), -1)
+	for index := 0; index < len(tokens); {
+		if number, width, ok := parseNumberWords(tokens[index:]); ok && approvedNumbers[number] {
+			index += width
+			continue
 		}
+		token := tokens[index]
+		if !approved[token] && !safeVoiceLexicon[token] {
+			return true
+		}
+		index++
 	}
 	return false
 }
 
-func approvedNumberValues(bundle turn.FactBundle) map[int]bool {
+func approvedNumberValues(facts []game.Fact) map[int]bool {
 	approved := make(map[int]bool)
-	for _, fact := range bundle.Facts {
+	for _, fact := range facts {
 		for _, field := range []string{fact.Subject, fact.Value, fact.Text} {
 			for _, token := range claimTokenPattern.FindAllString(field, -1) {
 				if value, err := strconv.Atoi(token); err == nil {

@@ -53,7 +53,7 @@ func (r Resolver) Resolve(in intent.Intent) game.ActionResult {
 	case intent.ActionWait:
 		result = makeResult("waited", 10, "I wait where I am.")
 	case intent.ActionTalk:
-		result = r.talk(in)
+		return r.talk(in)
 	case intent.ActionUnknown:
 		return clarification("What do you want me to do?")
 	default:
@@ -430,23 +430,23 @@ func (r Resolver) talk(in intent.Intent) game.ActionResult {
 		}
 		if target != "" {
 			if _, ok := r.findInventoryItem(target); ok {
-				return makeResult("inventory_has_item", 1, "Yes. I have "+r.displayItemName(target)+".")
+				return makeResult("inventory_has_item", 0, "Yes. I have "+r.displayItemName(target)+".")
 			}
-			return makeResult("inventory_missing_item", 1, "No. I do not have "+target+".")
+			return makeResult("inventory_missing_item", 0, "No. I do not have "+target+".")
 		}
 
 		names := r.inventoryNames()
 		if len(names) == 0 {
-			return makeResult("inventory_empty", 1, "I do not have anything useful on me.")
+			return makeResult("inventory_empty", 0, "I do not have anything useful on me.")
 		}
-		return makeResult("inventory_listed", 1, "I have: "+strings.Join(names, ", ")+".")
+		return makeResult("inventory_listed", 0, "I have: "+strings.Join(names, ", ")+".")
 	}
 
 	if isItemPresenceQuestion(in) {
 		return r.answerItemLocation(in)
 	}
 
-	return makeResult("talked", 1, "I hear you.")
+	return makeResult("talked", 0, "I hear you.")
 }
 
 func (r Resolver) answerItemLocation(in intent.Intent) game.ActionResult {
@@ -455,23 +455,23 @@ func (r Resolver) answerItemLocation(in intent.Intent) game.ActionResult {
 		target = strings.TrimSpace(in.Target)
 	}
 	if target == "" || isInventoryListTarget(target) {
-		return makeResult("talked", 1, "I hear you.")
+		return makeResult("talked", 0, "I hear you.")
 	}
 
 	itemID, item, ok := r.findKnownItem(target)
 	if !ok {
-		return makeResult("item_location_unknown", 1, "I do not know what "+target+" is.")
+		return makeResult("item_location_unknown", 0, "I do not know what "+target+" is.")
 	}
 	if r.state.HasItem(itemID) {
-		return makeResult("item_location_inventory", 1, "I have "+item.Name+".")
+		return makeResult("item_location_inventory", 0, "I have "+item.Name+".")
 	}
 	if !r.state.IsItemDiscovered(itemID) {
-		return makeResult("item_location_unknown", 1, "I have not found "+item.Name+" yet.")
+		return makeResult("item_location_unknown", 0, "I have not found "+item.Name+" yet.")
 	}
 	if container, ok := r.findItemContainer(itemID); ok {
-		return makeResult("item_location_known", 1, "I found "+item.Name+" in "+container.Name+".")
+		return makeResult("item_location_known", 0, "I found "+item.Name+" in "+container.Name+".")
 	}
-	return makeResult("item_location_known", 1, "I found "+item.Name+" nearby.")
+	return makeResult("item_location_known", 0, "I found "+item.Name+" nearby.")
 }
 
 func (r Resolver) autonomyResult(in intent.Intent) (game.ActionResult, bool) {

@@ -38,11 +38,17 @@ func ProcessTurn(ctx context.Context, message string, state *world.State, parser
 		return ProcessedTurn{}, fmt.Errorf("snapshot world: %w", err)
 	}
 
-	parseCtx, cancelParse := context.WithTimeout(ctx, 60*time.Second)
-	plan, provenance, err := parser.ParseWithProvenance(parseCtx, message, snapshot)
-	cancelParse()
-	if err != nil {
-		return ProcessedTurn{}, err
+	plan, conversational := intent.PureConversationPlan(message)
+	var provenance intent.ParseProvenance
+	if conversational {
+		provenance = intent.ParseProvenance{Source: intent.ParseSourceFallback}
+	} else {
+		parseCtx, cancelParse := context.WithTimeout(ctx, 60*time.Second)
+		plan, provenance, err = parser.ParseWithProvenance(parseCtx, message, snapshot)
+		cancelParse()
+		if err != nil {
+			return ProcessedTurn{}, err
+		}
 	}
 
 	result := turn.NewExecutor(state).Execute(plan)

@@ -97,22 +97,93 @@ func TestCheckResponseAllowsKnownPitchBlackReturnDirection(t *testing.T) {
 	}
 }
 
+func TestCheckResponseAttributesDarkThenLitAwarenessBySentenceEvidence(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	state.CurrentRoomID = scenario.RoomStorage
+	state.PreviousRoomID = scenario.RoomReception
+	before := Capture(state)
+	state.ActiveLight = true
+	after := Capture(state)
+	result := turn.Result{Outcomes: []turn.ActionOutcome{
+		roomAwarenessWithVisibleFact("none", "I cannot make out any distinct objects."),
+		{Intent: intent.Intent{Action: intent.ActionTurnOn, Item: "flashlight"}, Result: game.ActionResult{Status: game.ActionSucceeded, Outcome: "flashlight_on", VisibleFacts: []game.Fact{{Kind: game.FactAction, Text: "I turn on the flashlight.", Required: true}}}},
+		roomAwarenessWithVisibleFact("Storage Cabinet", "I can see: Storage Cabinet."),
+	}}
+	reply := response.Response{
+		Text: "I cannot make out any distinct objects. I turn on the flashlight. I can see: Storage Cabinet.",
+		Sentences: []response.ResponseSentence{
+			{Text: "I cannot make out any distinct objects.", FactIDs: []game.FactID{"f001"}},
+			{Text: "I turn on the flashlight.", FactIDs: []game.FactID{"f002"}},
+			{Text: "I can see: Storage Cabinet.", FactIDs: []game.FactID{"f003"}},
+		},
+		UsedFactIDs: []game.FactID{"f001", "f002", "f003"},
+	}
+	step := Step{Player: "look around then turn on the flashlight then look around", Before: before, After: after, Turn: session.ProcessedTurn{Result: result, Response: reply}}
+
+	if violations := CheckResponse(step, state); hasViolation(violations, "response_darkness_leak") {
+		t.Fatalf("lit sentence was attributed to earlier dark awareness: %#v", violations)
+	}
+}
+
+func TestCheckResponseAttributesLitThenDarkAwarenessBySentenceEvidence(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	state.CurrentRoomID = scenario.RoomStorage
+	state.PreviousRoomID = scenario.RoomReception
+	state.ActiveLight = true
+	before := Capture(state)
+	state.ActiveLight = false
+	after := Capture(state)
+	result := turn.Result{Outcomes: []turn.ActionOutcome{
+		roomAwarenessWithVisibleFact("Storage Cabinet", "I can see: Storage Cabinet."),
+		{Intent: intent.Intent{Action: intent.ActionTurnOff, Item: "flashlight"}, Result: game.ActionResult{Status: game.ActionSucceeded, Outcome: "flashlight_off", VisibleFacts: []game.Fact{{Kind: game.FactAction, Text: "I turn off the flashlight.", Required: true}}}},
+		roomAwarenessWithVisibleFact("none", "I cannot make out any distinct objects."),
+	}}
+	reply := response.Response{
+		Text: "I can see: Storage Cabinet. I turn off the flashlight. I cannot make out any distinct objects.",
+		Sentences: []response.ResponseSentence{
+			{Text: "I can see: Storage Cabinet.", FactIDs: []game.FactID{"f001"}},
+			{Text: "I turn off the flashlight.", FactIDs: []game.FactID{"f002"}},
+			{Text: "I cannot make out any distinct objects.", FactIDs: []game.FactID{"f003"}},
+		},
+		UsedFactIDs: []game.FactID{"f001", "f002", "f003"},
+	}
+	step := Step{Player: "look around then turn off the flashlight then look around", Before: before, After: after, Turn: session.ProcessedTurn{Result: result, Response: reply}}
+
+	if violations := CheckResponse(step, state); hasViolation(violations, "response_darkness_leak") {
+		t.Fatalf("lit sentence was attributed to later dark awareness: %#v", violations)
+	}
+}
+
+func TestCheckResponseDoesNotExemptFallbackSentenceFromDarkness(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	state.CurrentRoomID = scenario.RoomStorage
+	result := turn.Result{Outcomes: []turn.ActionOutcome{roomAwarenessWithVisibleFact("none", "I cannot make out any distinct objects.")}}
+	reply := response.Response{
+		Text:         "I can see Storage Cabinet.",
+		UsedFallback: true,
+		Sentences: []response.ResponseSentence{{
+			Text: "I can see Storage Cabinet.", FactIDs: []game.FactID{"f001"},
+		}},
+		UsedFactIDs: []game.FactID{"f001"},
+	}
+
+	assertResponseViolation(t, CheckResponse(responseStep(state, result, reply), state), "response_darkness_leak")
+}
+
 func TestCheckResponseRejectsDebugMarker(t *testing.T) {
 	state := scenario.NewPrototypeWorld()
 	violations := CheckResponse(responseStep(state, normalResult(), response.Response{Text: "debug: I search the desk."}), state)
 	assertResponseViolation(t, violations, "response_debug_marker")
 }
 
-func TestCheckResponseAllowsFallbackWithUngroundedFactIDWhenOtherInvariantsHold(t *testing.T) {
+func TestCheckResponseRejectsFallbackWithUngroundedFactID(t *testing.T) {
 	state := scenario.NewPrototypeWorld()
 	violations := CheckResponse(responseStep(state, normalResult(), response.Response{
 		Text:         "I search the desk.",
 		UsedFallback: true,
 		UsedFactIDs:  []game.FactID{"f999"},
 	}), state)
-	if len(violations) != 0 {
-		t.Fatalf("fallback response violations = %#v, want none", violations)
-	}
+	assertResponseViolation(t, violations, "response_fact_id_ungrounded")
 }
 
 func responseStep(state *world.State, result turn.Result, reply response.Response) Step {
@@ -158,5 +229,18 @@ func assertResponseViolation(t *testing.T, violations []Violation, code string) 
 	t.Helper()
 	if !hasViolation(violations, code) {
 		t.Fatalf("violations = %#v, want %q", violations, code)
+	}
+}
+
+func roomAwarenessWithVisibleFact(value, text string) turn.ActionOutcome {
+	return turn.ActionOutcome{
+		Intent: intent.Intent{Action: intent.ActionInspect},
+		Result: game.ActionResult{
+			Status:  game.ActionSucceeded,
+			Outcome: "inspected_room",
+			VisibleFacts: []game.Fact{{
+				Kind: game.FactVisibleObjects, Value: value, Text: text, Required: true,
+			}},
+		},
 	}
 }

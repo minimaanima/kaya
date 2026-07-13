@@ -273,7 +273,7 @@ Exit criteria:
 
 Status:
 
-Blocked pending live Ollama response certification. The hardened deterministic prototype, all nine generated placements, and manual routes complete. One generic exact-copy response repair now completes seed 12, but seeds 10 and 11 still fall back when their single repair omits the required elapsed-time fact.
+Blocked pending live Ollama response certification. The hardened deterministic prototype, all nine generated placements, and manual routes complete. The latest recorded live run remains 1/3: the generic exact-copy response repair completes seed 12, but seeds 10 and 11 still fall back when their single repair omits the required elapsed-time fact. The final whole-change audit strengthened conversation safety, fact validation, invariants, response evidence, and live provenance acceptance offline; it did not rerun the opt-in live gate.
 
 Goal:
 

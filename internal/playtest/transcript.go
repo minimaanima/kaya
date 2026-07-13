@@ -8,6 +8,7 @@ import (
 	"kaya/internal/game"
 	"kaya/internal/intent"
 	"kaya/internal/kaya"
+	"kaya/internal/response"
 	"kaya/internal/rungen"
 	"kaya/internal/turn"
 	"kaya/internal/world"
@@ -237,6 +238,8 @@ func formatEvents(events []game.WorldEvent) string {
 func writeResponse(b *strings.Builder, step Step) {
 	response := step.Turn.Response
 	writeFencedSection(b, "Response text", response.Text)
+	b.WriteString("Response sentence evidence:\n")
+	writeFenced(formatResponseSentences(response.Sentences), b)
 	b.WriteString("Response metadata:\n")
 	fmt.Fprintf(b, "- Fallback flag: `%t`\n", response.UsedFallback)
 	fmt.Fprintf(b, "- Repair attempted: `%t`\n", response.RepairAttempted)
@@ -263,6 +266,25 @@ func writeResponse(b *strings.Builder, step Step) {
 	if strings.TrimSpace(response.RepairGenerationError) != "" {
 		writeFencedSection(b, "Repair generation error", response.RepairGenerationError)
 	}
+}
+
+func formatResponseSentences(sentences []response.ResponseSentence) string {
+	if len(sentences) == 0 {
+		return "none\n"
+	}
+	var b strings.Builder
+	for index, sentence := range sentences {
+		fmt.Fprintf(&b, "sentence %d: text=%q fact_ids=[%s]\n", index+1, sentence.Text, joinFactIDsPreserved(sentence.FactIDs))
+	}
+	return b.String()
+}
+
+func joinFactIDsPreserved(ids []game.FactID) string {
+	values := make([]string, len(ids))
+	for index, id := range ids {
+		values[index] = string(id)
+	}
+	return strings.Join(values, ",")
 }
 
 func writeSnapshot(b *strings.Builder, title string, snapshot Snapshot) {
@@ -366,8 +388,20 @@ func snapshotEntryMap(snapshot Snapshot) map[string]string {
 	for _, key := range sortedObjectItemKeys(snapshot.ObjectRevealedItems) {
 		entries["object_revealed_items."+string(key)] = joinItemIDs(snapshot.ObjectRevealedItems[key])
 	}
+	for _, roomID := range sortedRoomVisibilityKeys(snapshot.RoomVisibility) {
+		entries["room_visibility."+string(roomID)] = string(snapshot.RoomVisibility[roomID])
+	}
+	for _, roomID := range sortedRoomObjectKeys(snapshot.RoomObjects) {
+		entries["room_objects."+string(roomID)] = joinObjectIDsPreserved(snapshot.RoomObjects[roomID])
+	}
 	for _, key := range sortedDoorKeys(snapshot.DoorStates) {
 		entries["door_state."+string(key)] = string(snapshot.DoorStates[key])
+	}
+	for _, doorID := range sortedDoorNameKeys(snapshot.DoorNames) {
+		entries["door_name."+string(doorID)] = snapshot.DoorNames[doorID]
+	}
+	for _, doorID := range sortedDoorAliasKeys(snapshot.DoorAliases) {
+		entries["door_aliases."+string(doorID)] = joinSorted(snapshot.DoorAliases[doorID])
 	}
 	for _, roomID := range sortedKnownExitRoomKeys(snapshot.KnownExitDirections) {
 		prefix := "known_exit_directions." + string(roomID)
@@ -416,25 +450,47 @@ func joinInts(values []int) string {
 }
 
 func joinScheduledEvents(values []world.ScheduledEvent) string {
-	cloned := append([]world.ScheduledEvent(nil), values...)
-	sort.Slice(cloned, func(i, j int) bool {
-		left, right := cloned[i], cloned[j]
-		if left.TriggerAtSeconds != right.TriggerAtSeconds {
-			return left.TriggerAtSeconds < right.TriggerAtSeconds
-		}
-		if left.Event.Type != right.Event.Type {
-			return left.Event.Type < right.Event.Type
-		}
-		if left.Event.Description != right.Event.Description {
-			return left.Event.Description < right.Event.Description
-		}
-		return left.Event.Danger < right.Event.Danger
-	})
-	parts := make([]string, len(cloned))
-	for index, value := range cloned {
+	parts := make([]string, len(values))
+	for index, value := range values {
 		parts[index] = fmt.Sprintf("%d:%s:%s:%s", value.TriggerAtSeconds, value.Event.Type, value.Event.Danger, value.Event.Description)
 	}
 	return strings.Join(parts, ",")
+}
+
+func sortedRoomVisibilityKeys(values map[game.RoomID]world.Visibility) []game.RoomID {
+	keys := make([]game.RoomID, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	return keys
+}
+
+func sortedRoomObjectKeys(values map[game.RoomID][]game.ObjectID) []game.RoomID {
+	keys := make([]game.RoomID, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	return keys
+}
+
+func sortedDoorNameKeys(values map[game.DoorID]string) []game.DoorID {
+	keys := make([]game.DoorID, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	return keys
+}
+
+func sortedDoorAliasKeys(values map[game.DoorID][]string) []game.DoorID {
+	keys := make([]game.DoorID, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	return keys
 }
 
 func joinPreserved(values []string) string {

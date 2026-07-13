@@ -115,6 +115,10 @@ func TestRenderMarkdownIncludesReproductionEvidence(t *testing.T) {
 		"Repair generation error:",
 		"Before:",
 		"After:",
+		"room_visibility.reception=lit",
+		"room_objects.reception=desk",
+		"door_name.stairwell=Stairwell Door",
+		"door_aliases.stairwell=fire door",
 		"State diff:",
 		"Violations:",
 		"Objective emitted: `true`",
@@ -193,6 +197,17 @@ func TestRenderMarkdownIsStableAcrossMapIteration(t *testing.T) {
 	}
 }
 
+func TestRenderMarkdownPreservesScheduledEventInsertionOrder(t *testing.T) {
+	snapshot := Snapshot{RemainingEventTimes: []int{5, 5}, RemainingEvents: []world.ScheduledEvent{
+		{TriggerAtSeconds: 5, Event: game.WorldEvent{Description: "z inserted first"}},
+		{TriggerAtSeconds: 5, Event: game.WorldEvent{Description: "a inserted second"}},
+	}}
+	got := RenderMarkdown(Session{Steps: []Step{{Before: snapshot, After: snapshot}}})
+	if first, second := strings.Index(got, "z inserted first"), strings.Index(got, "a inserted second"); first < 0 || second < 0 || first > second {
+		t.Fatalf("scheduled event insertion order was not preserved:\n%s", got)
+	}
+}
+
 func TestRenderMarkdownPreservesCompleteTurnEvidenceAndSemanticOrder(t *testing.T) {
 	step := Step{
 		Number:    1,
@@ -258,7 +273,13 @@ func TestRenderMarkdownPreservesCompleteTurnEvidenceAndSemanticOrder(t *testing.
 					},
 				}},
 			},
-			Response: response.Response{UsedFactIDs: []game.FactID{"fact-z", "fact-a"}},
+			Response: response.Response{
+				UsedFactIDs: []game.FactID{"fact-z", "fact-a"},
+				Sentences: []response.ResponseSentence{
+					{Text: "sentence z", FactIDs: []game.FactID{"fact-z"}},
+					{Text: "sentence a", FactIDs: []game.FactID{"fact-a"}},
+				},
+			},
 		},
 		Violations: []Violation{{Code: "code ``` text", Detail: "detail"}},
 	}
@@ -277,6 +298,8 @@ func TestRenderMarkdownPreservesCompleteTurnEvidenceAndSemanticOrder(t *testing.
 		"stress_delta=1 trust_delta=-2 fear_delta=3 pain_delta=-4 exhaustion_delta=5",
 		"action result question ``` text",
 		"Used fact IDs: `fact-z`, `fact-a`",
+		"sentence 1: text=\"sentence z\" fact_ids=[fact-z]",
+		"sentence 2: text=\"sentence a\" fact_ids=[fact-a]",
 		"Violation code:",
 	} {
 		if !strings.Contains(got, expected) {
@@ -350,8 +373,20 @@ func transcriptSnapshot() Snapshot {
 		ObjectRevealedItems: map[game.ObjectID][]game.ItemID{
 			"desk": {"flashlight"},
 		},
+		RoomVisibility: map[game.RoomID]world.Visibility{
+			"reception": world.VisibilityLit,
+		},
+		RoomObjects: map[game.RoomID][]game.ObjectID{
+			"reception": {"desk"},
+		},
 		DoorStates: map[game.DoorID]world.DoorState{
 			"stairwell": world.DoorLocked,
+		},
+		DoorNames: map[game.DoorID]string{
+			"stairwell": "Stairwell Door",
+		},
+		DoorAliases: map[game.DoorID][]string{
+			"stairwell": {"fire door"},
 		},
 		RemainingEventTimes: []int{11, 5},
 		RemainingEvents: []world.ScheduledEvent{
@@ -377,9 +412,8 @@ func transcriptSnapshotReordered() Snapshot {
 		"cabinet": {"brass_key"},
 		"desk":    {"flashlight"},
 	}
-	snapshot.RemainingEvents = []world.ScheduledEvent{
-		{TriggerAtSeconds: 5, Event: game.WorldEvent{Type: game.EventSound, Description: "sooner"}},
-		{TriggerAtSeconds: 11, Event: game.WorldEvent{Type: game.EventSound, Description: "later"}},
+	snapshot.RoomObjects = map[game.RoomID][]game.ObjectID{
+		"reception": {"desk"},
 	}
 	return snapshot
 }

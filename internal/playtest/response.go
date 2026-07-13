@@ -8,6 +8,7 @@ import (
 
 	"kaya/internal/game"
 	"kaya/internal/intent"
+	"kaya/internal/response"
 	"kaya/internal/turn"
 	"kaya/internal/world"
 )
@@ -26,21 +27,27 @@ func CheckResponse(step Step, state *world.State) []Violation {
 	if kayaResponsePrefix.MatchString(text) {
 		violations = append(violations, responseViolation("response_kaya_prefix", text, "response starts with Kaya"))
 	}
-	if !reply.UsedFallback {
-		for _, factID := range ungroundedFactIDs(step, reply.UsedFactIDs) {
-			violations = append(violations, responseViolation("response_fact_id_ungrounded", text, fmt.Sprintf("used fact ID %q is absent from the stored turn fact bundle", factID)))
-		}
+	for _, factID := range ungroundedFactIDs(step, responseFactIDs(reply)) {
+		violations = append(violations, responseViolation("response_fact_id_ungrounded", text, fmt.Sprintf("used fact ID %q is absent from the stored turn fact bundle", factID)))
 	}
 	if isClarificationTurn(step.Turn.Result) && step.After.Time != step.Before.Time {
 		violations = append(violations, responseViolation("response_clarification_advanced_time", text, fmt.Sprintf("clarification advanced time from %d to %d", step.Before.Time, step.After.Time)))
 	}
-	if leaksPitchBlackRoomAwareness(step, state, text) {
+	if leaksPitchBlackRoomAwareness(step, state) {
 		violations = append(violations, responseViolation("response_darkness_leak", text, "pitch-black room awareness names a hidden object or direction"))
 	}
 	if debugResponseMarker.MatchString(text) {
 		violations = append(violations, responseViolation("response_debug_marker", text, "response contains a debug marker"))
 	}
 	return sortViolations(violations)
+}
+
+func responseFactIDs(reply response.Response) []game.FactID {
+	ids := append([]game.FactID(nil), reply.UsedFactIDs...)
+	for _, sentence := range reply.Sentences {
+		ids = append(ids, sentence.FactIDs...)
+	}
+	return ids
 }
 
 func responseViolation(code, text, detail string) Violation {
@@ -75,20 +82,80 @@ func isClarificationTurn(result turn.Result) bool {
 	return false
 }
 
-func leaksPitchBlackRoomAwareness(step Step, state *world.State, text string) bool {
+func leaksPitchBlackRoomAwareness(step Step, state *world.State) bool {
 	if state == nil {
 		return false
 	}
+	groups := outcomeFactIDGroups(step.Turn.Result)
+	hasSentenceEvidence := len(step.Turn.Response.Sentences) > 0
 	location := outcomeLocation{
 		room:     step.Before.CurrentRoom,
 		previous: step.Before.PreviousRoom,
 		light:    step.Before.ActiveLight,
 	}
-	for _, outcome := range step.Turn.Result.Outcomes {
-		if isRoomAwarenessOutcome(outcome) && leaksPitchBlackRoomTerms(state, location.room, location.light, text) {
-			return true
+	for index, outcome := range step.Turn.Result.Outcomes {
+		if isRoomAwarenessOutcome(outcome) {
+			if !hasSentenceEvidence {
+				if leaksPitchBlackRoomTerms(state, location.room, location.light, step.Turn.Response.Text) {
+					return true
+				}
+			} else {
+				for _, sentence := range step.Turn.Response.Sentences {
+					if citesAny(sentence.FactIDs, groups[index]) && leaksPitchBlackRoomTerms(state, location.room, location.light, sentence.Text) {
+						return true
+					}
+				}
+			}
 		}
 		location.advance(state, outcome)
+	}
+	return false
+}
+
+func outcomeFactIDGroups(result turn.Result) [][]game.FactID {
+	bundle := result.FactBundle("")
+	groups := make([][]game.FactID, len(result.Outcomes))
+	cursor := 0
+	for index, outcome := range result.Outcomes {
+		count := outcomeFactCount(outcome)
+		end := cursor + count
+		if end > len(bundle.Facts) {
+			end = len(bundle.Facts)
+		}
+		for _, fact := range bundle.Facts[cursor:end] {
+			groups[index] = append(groups[index], fact.ID)
+		}
+		cursor = end
+	}
+	return groups
+}
+
+func outcomeFactCount(outcome turn.ActionOutcome) int {
+	count := len(outcome.Result.VisibleFacts)
+	hasFailure, hasClarification := false, false
+	for _, fact := range outcome.Result.VisibleFacts {
+		hasFailure = hasFailure || fact.Kind == game.FactFailure
+		hasClarification = hasClarification || fact.Kind == game.FactClarification
+	}
+	if (outcome.Result.Status == game.ActionFailed || outcome.Result.Status == game.ActionRefused) && !hasFailure {
+		count++
+	}
+	if (outcome.Result.Status == game.ActionClarification || outcome.Result.NeedsClarification) && !hasClarification {
+		count++
+	}
+	if outcome.Result.DurationSeconds > 0 {
+		count++
+	}
+	return count + len(outcome.Result.Events)
+}
+
+func citesAny(cited, outcomeFacts []game.FactID) bool {
+	for _, citedID := range cited {
+		for _, outcomeID := range outcomeFacts {
+			if citedID == outcomeID {
+				return true
+			}
+		}
 	}
 	return false
 }

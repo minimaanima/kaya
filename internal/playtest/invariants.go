@@ -2,6 +2,7 @@ package playtest
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 
 	"kaya/internal/game"
@@ -80,12 +81,52 @@ func CheckTransition(def rungen.Definition, step Step) []Violation {
 		violations = append(violations, Violation{Code: "objective_outside_win_room", Detail: fmt.Sprintf("objective emitted in %q", step.After.CurrentRoom)})
 	}
 
+	objectItems := cloneObjectItems(step.Before.ObjectItems)
+	discovered := make(map[game.ItemID]bool, len(step.Before.Discovered))
+	for _, itemID := range step.Before.Discovered {
+		discovered[itemID] = true
+	}
+	light := step.Before.ActiveLight
+	roomID := step.Before.CurrentRoom
 	for _, outcome := range step.Turn.Result.Outcomes {
+		if isRoomAwarenessOutcome(outcome) && !awarenessMatchesLight(step.Before, roomID, light, outcome) {
+			violations = append(violations, Violation{Code: "flashlight_perception_order_mismatch", Detail: "room awareness facts do not match light state at that outcome"})
+		}
+		if outcome.Intent.Action == intent.ActionSearch && outcome.Result.Outcome == "searched_found_items" {
+			if len(objectItems[outcome.TargetObjectID]) == 0 {
+				violations = append(violations, Violation{Code: "taken_item_rediscovered", Detail: fmt.Sprintf("search of %q rediscovered an item after its container was empty", outcome.TargetObjectID)})
+			}
+			for _, itemID := range objectItems[outcome.TargetObjectID] {
+				discovered[itemID] = true
+			}
+		}
+		if outcome.Intent.Action == intent.ActionTakeItem {
+			if itemID, ok := targetedItemID(outcome, step.Before.ItemNames, step.Before.ItemAliases); ok {
+				if !discovered[itemID] && (outcome.Result.Outcome == "item_taken" || itemStateChanged(step.Before, step.After, itemID)) {
+					violations = append(violations, Violation{Code: "undiscovered_take_changed_item_state", Detail: fmt.Sprintf("undiscovered item %q was taken or changed item state", itemID)})
+				}
+				if outcome.Result.Outcome == "item_taken" {
+					removeItemFromObjects(objectItems, itemID)
+				}
+			}
+		}
+		if outcome.Result.Outcome == "door_unlocked" {
+			violations = append(violations, doorUnlockViolations(outcome, step.Before, step.After)...)
+		}
 		if outcome.Intent.Action == intent.ActionTakeItem && outcome.Result.Outcome == "item_taken" && !takenItemMoved(outcome, step.Before, step.After) {
 			violations = append(violations, Violation{Code: "taken_item_not_removed", Detail: "taken item remains in a container or was not added to inventory"})
 		}
 		if outcome.Intent.Action == intent.ActionMove && outcome.Result.Outcome == "door_blocked" && step.After.CurrentRoom != step.Before.CurrentRoom {
 			violations = append(violations, Violation{Code: "locked_move_changed_room", Detail: "blocked door movement changed current room"})
+		}
+		if outcome.Result.Outcome == "moved" {
+			roomID = step.After.CurrentRoom
+		}
+		switch outcome.Result.Outcome {
+		case "flashlight_on":
+			light = true
+		case "flashlight_off":
+			light = false
 		}
 	}
 	if !dueScheduledEventsConsumed(step.Before, step.After) {
@@ -95,6 +136,97 @@ func CheckTransition(def rungen.Definition, step Step) []Violation {
 		violations = append(violations, Violation{Code: "scheduled_event_emission_mismatch", Detail: "emitted events do not match scheduled events due during the elapsed interval"})
 	}
 	return sortViolations(violations)
+}
+
+func itemStateChanged(before, after Snapshot, itemID game.ItemID) bool {
+	return containsItem(before.Inventory, itemID) != containsItem(after.Inventory, itemID) ||
+		containsItem(before.Discovered, itemID) != containsItem(after.Discovered, itemID) ||
+		objectContainsItem(before.ObjectItems, itemID) != objectContainsItem(after.ObjectItems, itemID) ||
+		objectContainsItem(before.ObjectRevealedItems, itemID) != objectContainsItem(after.ObjectRevealedItems, itemID)
+}
+
+func removeItemFromObjects(objects map[game.ObjectID][]game.ItemID, removed game.ItemID) {
+	for objectID, itemIDs := range objects {
+		filtered := itemIDs[:0]
+		for _, itemID := range itemIDs {
+			if itemID != removed {
+				filtered = append(filtered, itemID)
+			}
+		}
+		objects[objectID] = filtered
+	}
+}
+
+func awarenessMatchesLight(snapshot Snapshot, roomID game.RoomID, activeLight bool, outcome turn.ActionOutcome) bool {
+	visibility, ok := snapshot.RoomVisibility[roomID]
+	if !ok {
+		return true
+	}
+	var visibleObjects string
+	found := false
+	for _, fact := range outcome.Result.VisibleFacts {
+		if fact.Kind == game.FactVisibleObjects {
+			visibleObjects = fact.Value
+			found = true
+			break
+		}
+	}
+	if !found {
+		return false
+	}
+	isDark := visibility.RequiresLight() && !activeLight
+	if isDark {
+		return visibleObjects == "none"
+	}
+	if len(snapshot.RoomObjects[roomID]) > 0 {
+		return visibleObjects != "none"
+	}
+	return true
+}
+
+func doorUnlockViolations(outcome turn.ActionOutcome, before, after Snapshot) []Violation {
+	violations := make([]Violation, 0)
+	targetID, ok := resolveDoorTarget(outcome.Intent.Target, before)
+	if !ok && outcome.Intent.Target == "" {
+		targetID, ok = inferUnlockedDoor(before, after)
+	}
+	if !ok || before.DoorStates[targetID] != world.DoorLocked || after.DoorStates[targetID] != world.DoorClosed {
+		violations = append(violations, Violation{Code: "intended_door_not_unlocked", Detail: fmt.Sprintf("unlock target %q did not change from locked to closed", outcome.Intent.Target)})
+	}
+	for doorID, beforeState := range before.DoorStates {
+		if doorID != targetID && after.DoorStates[doorID] != beforeState {
+			violations = append(violations, Violation{Code: "unintended_door_changed", Detail: fmt.Sprintf("door %q changed while unlocking %q", doorID, outcome.Intent.Target)})
+		}
+	}
+	return violations
+}
+
+func inferUnlockedDoor(before, after Snapshot) (game.DoorID, bool) {
+	var matched game.DoorID
+	for doorID, beforeState := range before.DoorStates {
+		if beforeState != world.DoorLocked || after.DoorStates[doorID] != world.DoorClosed {
+			continue
+		}
+		if matched != "" {
+			return "", false
+		}
+		matched = doorID
+	}
+	return matched, matched != ""
+}
+
+func resolveDoorTarget(target string, snapshot Snapshot) (game.DoorID, bool) {
+	var matched game.DoorID
+	for doorID, name := range snapshot.DoorNames {
+		if !world.MatchesTarget(target, name, snapshot.DoorAliases[doorID]) {
+			continue
+		}
+		if matched != "" {
+			return "", false
+		}
+		matched = doorID
+	}
+	return matched, matched != ""
 }
 
 func clarificationOrRefusal(result turn.Result) bool {
@@ -176,28 +308,20 @@ func containsTime(times []int, target int) bool {
 }
 
 func dueScheduledEventsEmitted(before, after Snapshot, outcomes []turn.ActionOutcome) bool {
-	expected := make(map[game.WorldEvent]int)
+	expected := make([]game.WorldEvent, 0)
 	for _, scheduled := range before.RemainingEvents {
 		if scheduled.TriggerAtSeconds > before.Time && scheduled.TriggerAtSeconds <= after.Time {
-			expected[scheduled.Event]++
+			expected = append(expected, scheduled.Event)
 		}
 	}
 
-	emitted := make(map[game.WorldEvent]int)
+	emitted := make([]game.WorldEvent, 0)
 	for _, outcome := range outcomes {
 		for _, event := range outcome.Result.Events {
-			emitted[event]++
+			emitted = append(emitted, event)
 		}
 	}
-	if len(expected) != len(emitted) {
-		return false
-	}
-	for event, expectedCount := range expected {
-		if emitted[event] != expectedCount {
-			return false
-		}
-	}
-	return true
+	return reflect.DeepEqual(expected, emitted)
 }
 
 func sortViolations(violations []Violation) []Violation {

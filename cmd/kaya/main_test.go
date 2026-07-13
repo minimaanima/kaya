@@ -9,6 +9,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -56,6 +58,42 @@ func (f fakeComposer) Compose(context.Context, turn.FactBundle) response.Respons
 
 var _ turnParser = fakeTurnParser{}
 var _ responseComposer = fakeComposer{}
+
+type provenanceTurnParser struct {
+	plan       intent.TurnPlan
+	provenance intent.ParseProvenance
+}
+
+func (p provenanceTurnParser) Parse(context.Context, string, game.PerceptionSnapshot) (intent.TurnPlan, error) {
+	return p.plan, nil
+}
+
+func (p provenanceTurnParser) ParseWithProvenance(context.Context, string, game.PerceptionSnapshot) (intent.TurnPlan, intent.ParseProvenance, error) {
+	return p.plan, p.provenance, nil
+}
+
+func TestProvenanceParserPreservesExtendedParserProvenance(t *testing.T) {
+	wantPlan := intent.FallbackPlan("go east")
+	wantProvenance := intent.ParseProvenance{Source: intent.ParseSourceModel, RawPlan: wantPlan, HasRawPlan: true, Canonicalized: true}
+	gotPlan, gotProvenance, err := (provenanceParser{parser: provenanceTurnParser{plan: wantPlan, provenance: wantProvenance}}).ParseWithProvenance(context.Background(), "go east", game.PerceptionSnapshot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotPlan, wantPlan) || !reflect.DeepEqual(gotProvenance, wantProvenance) {
+		t.Fatalf("plan/provenance = %#v / %#v, want %#v / %#v", gotPlan, gotProvenance, wantPlan, wantProvenance)
+	}
+}
+
+func TestProvenanceParserAdaptsLegacyParserWithoutInventingProvenance(t *testing.T) {
+	wantPlan := intent.FallbackPlan("go east")
+	gotPlan, gotProvenance, err := (provenanceParser{parser: fakeTurnParser{plan: wantPlan}}).ParseWithProvenance(context.Background(), "go east", game.PerceptionSnapshot{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotPlan, wantPlan) || !reflect.DeepEqual(gotProvenance, intent.ParseProvenance{}) {
+		t.Fatalf("plan/provenance = %#v / %#v, want %#v / empty", gotPlan, gotProvenance, wantPlan)
+	}
+}
 
 func TestParsePlayOptionsUsesExplicitSeed(t *testing.T) {
 	options, err := parsePlayOptions([]string{"--seed", "-42"}, func() (int64, error) { return 99, nil })
@@ -109,6 +147,22 @@ func TestParsePlaytestOptionsUsesExistingPlayOptionBehavior(t *testing.T) {
 	}
 	if options.Seed != -42 || !options.ParseLog {
 		t.Fatalf("options = %#v, want explicit seed and parse log", options)
+	}
+}
+
+func TestParsePlaytestOptionsAcceptsInt64Extremes(t *testing.T) {
+	for _, seed := range []int64{math.MinInt64, math.MaxInt64} {
+		t.Run(strconv.FormatInt(seed, 10), func(t *testing.T) {
+			options, err := parsePlaytestOptions([]string{"--seed", strconv.FormatInt(seed, 10)}, func() (int64, error) {
+				return 0, errors.New("seed generator should not be called")
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if options.Seed != seed {
+				t.Fatalf("seed = %d, want %d", options.Seed, seed)
+			}
+		})
 	}
 }
 

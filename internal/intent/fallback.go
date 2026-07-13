@@ -2,6 +2,7 @@ package intent
 
 import (
 	"strings"
+	"unicode"
 
 	"kaya/internal/game"
 )
@@ -10,10 +11,37 @@ const defaultClarification = "What do you want Kaya to do?"
 
 func FallbackPlan(message string) TurnPlan {
 	message = strings.TrimSpace(message)
+	if plan, ok := PureConversationPlan(message); ok {
+		return plan
+	}
 	if plan, ok := compoundFallbackPlan(message); ok {
 		return plan
 	}
 	return fallbackSinglePlan(message)
+}
+
+// PureConversationPlan recognizes only complete, non-gameplay conversational messages.
+func PureConversationPlan(message string) (TurnPlan, bool) {
+	raw := strings.TrimSpace(message)
+	words := strings.FieldsFunc(strings.ToLower(raw), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	})
+	normalized := strings.Join(words, " ")
+	switch normalized {
+	case "hello", "hello kaya", "hi", "hi kaya", "hey", "hey kaya",
+		"okay", "ok", "all right", "alright", "yes", "no", "got it", "understood",
+		"thanks", "thank you", "i hear you", "i m here", "im here",
+		"are you there", "are you still with me", "can you hear me", "is the line still clear",
+		"hello are you there", "hello are you still with me", "hello can you hear me", "hello is the line still clear":
+		in := Intent{Action: ActionTalk, Target: "conversation", Confidence: 1, RawText: raw, Modifiers: []string{}}
+		return TurnPlan{
+			Actions:    []PlannedAction{{Intent: in, TargetMode: TargetSingle}},
+			Confidence: 1,
+			RawText:    raw,
+		}, true
+	default:
+		return TurnPlan{}, false
+	}
 }
 
 func fallbackSinglePlan(message string) TurnPlan {
@@ -134,8 +162,8 @@ func splitSequentialClauses(message string) []string {
 }
 
 func isPluralReferentSelection(message string) bool {
-	switch strings.Trim(message, " .!?") {
-	case "both", "both of them", "them", "all", "all of them":
+	switch stripTrailingPoliteness(message) {
+	case "both", "both doctors", "both of them", "them", "all", "all of them":
 		return true
 	default:
 		return false
@@ -344,9 +372,20 @@ func cleanTargetPrefix(target string) string {
 			target = strings.TrimPrefix(target, prefix)
 		}
 		if target == before {
-			return target
+			return stripTrailingPoliteness(target)
 		}
 	}
+}
+
+func stripTrailingPoliteness(value string) string {
+	value = strings.TrimSpace(strings.Trim(value, ".,!?;:"))
+	for _, suffix := range []string{", please", " please"} {
+		if strings.HasSuffix(value, suffix) {
+			value = strings.TrimSpace(strings.TrimSuffix(value, suffix))
+			break
+		}
+	}
+	return strings.TrimSpace(strings.Trim(value, ".,!?;:"))
 }
 
 func findCue(value string, cue string) int {

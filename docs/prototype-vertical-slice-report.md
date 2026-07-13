@@ -2,9 +2,9 @@
 
 ## Status
 
-BLOCKED for live Ollama certification. The deterministic slice, all nine generated placements, and three completed manual console routes pass. The opt-in live gate reaches the local runtime but rejects ungrounded model response prose, producing response-generation fallback. Phase 8 is therefore not marked complete.
+BLOCKED for live Ollama certification. The deterministic slice, all nine generated placements, and three completed manual console routes pass. The latest recorded opt-in live run passed 1/3 seeds: seed 12 completed, while seeds 10 and 11 still produced response fallback after their one allowed repair omitted a required elapsed-time fact. Phase 8 is therefore not marked complete.
 
-No unresolved Critical or Important engine-invariant defects remain. The response fallback below is a certification blocker under this task's zero-fallback acceptance criterion and is not being relabeled as a passing result.
+The final whole-change audit findings are fixed and covered offline. The final-fix pass did not run `KAYA_LIVE_SLICE_TESTS=1`; the latest live evidence below remains the certification authority and is not being relabeled as a passing result.
 
 ## Commands And Results
 
@@ -58,6 +58,20 @@ The deterministic 1,000-session proof exercised every flashlight/key pair:
 
 Runtime configuration observed by `TestOllamaPrototypeCompletePlaythroughs`: model `qwen3.5:4b`, base URL `http://localhost:11434`. The `ollama` executable was not on `PATH`, but the configured local service answered the test requests. No `KAYA_OLLAMA_MODEL` or `KAYA_OLLAMA_URL` override was present.
 
+### Latest Recorded Run
+
+The latest recorded live run used the exact-copy repair contract and remained BLOCKED after `1m53.5880495s`. Seed 12 passed; seeds 10 and 11 failed at storage awareness when the repaired JSON omitted the required elapsed-time fact. Parser fallback/errors remained `0/0` for every seed.
+
+| Seed | Result | Response provenance |
+| --- | --- | --- |
+| 10 | BLOCKED at storage awareness: initial `unsupported_claim`, repair `missing_required_fact` | 6 turns; response generated/fallback `5/1`; repair attempts/successes `4/3` |
+| 11 | BLOCKED at the same storage-awareness step: initial `unsupported_claim`, repair `missing_required_fact` | 6 turns; response generated/fallback `5/1`; repair attempts/successes `4/3` |
+| 12 | PASS | 9 turns; response generated/fallback `9/0`; repair attempts/successes `6/6` |
+
+The final-fix audit strengthened offline acceptance: every processed live turn must now have source `model` or `repair`, a captured raw plan, exact processed/raw/resolved/generated count equality, and zero parser fallback, provenance errors, or response fallback. No new live run was made.
+
+### Initial Run
+
 ```powershell
 $env:KAYA_LIVE_SLICE_TESTS = '1'
 $env:GOCACHE = Join-Path (Get-Location) '.gocache'
@@ -66,7 +80,7 @@ go test ./internal/playtest -run TestOllamaPrototypeCompletePlaythroughs -v -cou
 
 The initial run found a real validator defect: approved entities followed by punctuation were rejected as `unknown_entity`. `TestComposerAcceptsApprovedEntitiesAdjacentToPunctuation` was RED, then GREEN after punctuation-normalized whole-word matching. An interim neutral-token lexicon expansion briefly accepted fact-cited paraphrase, but review removed that unsafe broad acceptance. Current behavior is strict: `TestComposerRepairsNeutralParaphraseWithExactFactText` proves the paraphrase is rejected first and then recovered only by the one-pass exact-text repair; `TestComposerRejectsUnfoundedTakeClaim` and direct validator regressions preserve the fact lock for invented state or action claims. Existing unknown-entity, unknown-claim, predicate, and movement rejection tests remain green.
 
-The final live run remains BLOCKED: 0/3 seed subtests passed, with observed wall time `30.9070275s`. All parser turns seen before failure used the generator with raw plans captured and zero parser fallback/provenance errors. The response validator correctly rejected additional prose not present in the facts, for example `while I hold it steady` and `my eyes adjust to the dark`; accepting such prose merely to suppress fallback would weaken the fact-locking acceptance criterion.
+The initial live run was BLOCKED: 0/3 seed subtests passed, with observed wall time `30.9070275s`. All parser turns seen before failure used the generator with raw plans captured and zero parser fallback/provenance errors. The response validator correctly rejected additional prose not present in the facts, for example `while I hold it steady` and `my eyes adjust to the dark`; accepting such prose merely to suppress fallback would weaken the fact-locking acceptance criterion.
 
 | Seed | Placements | Last observed provenance before failure | Result |
 | --- | --- | --- | --- |
@@ -192,28 +206,24 @@ Fixed defects:
 - Punctuation-adjacent approved entity names no longer fail `unknown_entity`; regression: `TestComposerAcceptsApprovedEntitiesAdjacentToPunctuation`.
 - Broad neutral-token acceptance was removed after review. `TestComposerRepairsNeutralParaphraseWithExactFactText` proves strict initial rejection plus one exact-text repair, while `TestComposerRejectsUnfoundedTakeClaim` and direct validator tests reject invented action/state prose.
 
-Recorded Minor findings:
+Final-audit fixes:
 
-- Task 1: `provenanceParser` adapter provenance, deadline, and fact-bundle branches lack focused coverage.
-- Task 5: `MinInt64` and `MaxInt64` option parsing lacks direct coverage.
-- Live parser wording: `both doctors, please` and polite item suffixes can fail to normalize, while the concise remembered `both` and item name complete the route.
-- Live response wording: drafts that add uncited neutral-style narration are rejected under the fact lock; an exact-text one-pass repair may recover the required facts, while failed repair remains visible through fallback/debug output.
+- Pure greetings, acknowledgements, and connection chatter bypass model parsing through a conservative local conversation plan; inventory and item fact queries now consume zero game time and cannot fire scheduled events. Greeting-prefixed commands remain executable.
+- Response validation approves entities, tokens, and number equivalents only from each sentence's cited facts while retaining bundle-wide required coverage.
+- Transition invariants now cover undiscovered takes, flashlight/perception order, post-take rediscovery, intended-door-only unlocking, known exits, observed facts, and scheduled-event chronology.
+- Generated and fallback responses preserve ordered sentence/fact evidence, so darkness validation is outcome-local without exempting fallback.
+- Live acceptance rejects unknown source, missing raw plans, count mismatches, parser fallback/errors, and response fallback.
+- Trailing `please` normalization, both CLI parser-adapter branches, parse/compose deadline cancellation, exact fact-bundle delivery, and direct `MinInt64`/`MaxInt64` option parsing have permanent coverage.
 
 Adversarial coverage included conversational chatter, typos (`isnide`, `cabiner`), interruption, repeated searches, doctor ambiguity with `both`, invalid moon/elevator suggestions, darkness, scheduled sound events, flashlight use, locked-door unlocking, time advancement, autonomy-visible clarification, and objective completion.
 
 ## Files
 
-Tracked certification changes:
+Tracked final-fix changes span `internal/intent`, `internal/actions`, `internal/session`, `internal/response`, `internal/playtest`, `cmd/kaya`, and the milestone/report documentation.
 
-- `internal/playtest/ollama_integration_test.go`
-- `internal/response/validator.go`
-- `internal/response/composer_test.go`
-- `docs/prototype-vertical-slice-report.md`
-- `docs/engine-milestones.md`
+Untracked final-fix evidence: `.superpowers/sdd/final-fix-report.md`.
 
-Untracked task evidence: `.superpowers/sdd/task-6-report.md`.
-
-## Response Repair Update
+## Post-Repair Run
 
 Task 6 was resumed from blocked-state commit `7fe2891` with one model-agnostic response validate-and-repair attempt. The validator remains authoritative: the initial and repaired drafts both pass through `validateDraft`, and a failed repair still returns deterministic fallback.
 
@@ -233,7 +243,7 @@ go test ./... -count=1
 
 PASS: all six adversarial subtests, the 1,000-session proof in `0.45s`, and the full 15-package suite. The default live gate also PASSed by skipping before client construction.
 
-The final combined live command remained BLOCKED after `1m20.3245446s`:
+The post-repair live command remained BLOCKED after `1m20.3245446s`:
 
 ```powershell
 $env:KAYA_LIVE_SLICE_TESTS = '1'
@@ -254,7 +264,7 @@ Seed 10 and 11 repair draft excerpt, retained in the failing transcript:
 
 Seed 12 repair draft retained its required-fact schema but added uncited wording including `before I move east`, `fills my view`, and `while I feel uneasy`; strict validation rejected it. Every live failure printed the complete Markdown transcript with response repair provenance. Phase 8 remains BLOCKED.
 
-## Exact-Copy Repair Contract Update
+## Exact-Copy Repair Contract
 
 The one-pass repair contract was narrowed without changing the validator or model configuration. Repair input now exposes `requiredFacts` separately in original bundle order as exact `{id, text}` pairs, carries optional facts separately as context, and instructs the model to emit exactly one sentence per required fact, cite only that ID, and copy that text without additions or rephrasing.
 
@@ -264,7 +274,7 @@ Focused RED/GREEN evidence:
 - `TestComposerFallsBackWhenRepairOmitsRequiredFact` proves that an incomplete exact-copy repair remains deterministic fallback with `missing_required_fact` after exactly two total generator calls.
 - Existing repair-invalid tests continue to prove unsupported additions are rejected.
 
-Final live command:
+Latest recorded live command:
 
 ```powershell
 $env:KAYA_LIVE_SLICE_TESTS = '1'

@@ -20,6 +20,26 @@ func TestComposerAcceptsDraftCoveringRequiredFacts(t *testing.T) {
 	if got.UsedFallback || got.Text != "I searched Doctor Near Cabinet. The doctor is dead." {
 		t.Fatalf("response = %#v", got)
 	}
+	if len(got.Sentences) != 1 || got.Sentences[0].Text != got.Text || !reflect.DeepEqual(got.Sentences[0].FactIDs, []game.FactID{"f001", "f002"}) {
+		t.Fatalf("sentence evidence = %#v", got.Sentences)
+	}
+}
+
+func TestComposerFallbackCarriesFactSafeSentenceEvidence(t *testing.T) {
+	bundle := doctorBundle()
+	got := NewComposer(nil).Compose(context.Background(), bundle)
+
+	if !got.UsedFallback || len(got.Sentences) != 2 {
+		t.Fatalf("response = %#v, want two fallback evidence sentences", got)
+	}
+	for index, sentence := range got.Sentences {
+		if sentence.Text != bundle.Facts[index].Text || !reflect.DeepEqual(sentence.FactIDs, []game.FactID{bundle.Facts[index].ID}) {
+			t.Fatalf("sentence %d = %#v, want exact fact evidence", index, sentence)
+		}
+	}
+	if want := []game.FactID{"f001", "f002"}; !reflect.DeepEqual(got.UsedFactIDs, want) {
+		t.Fatalf("used fact IDs = %#v, want %#v", got.UsedFactIDs, want)
+	}
 }
 
 func TestComposerRejectsUnknownFactID(t *testing.T) {
@@ -94,6 +114,53 @@ func TestComposerAcceptsCitedNumberWordEquivalent(t *testing.T) {
 	got := NewComposer(gen).Compose(context.Background(), bundle)
 	if got.UsedFallback {
 		t.Fatalf("response = %#v, want accepted number-word equivalent", got)
+	}
+}
+
+func TestValidateDraftRejectsSwappedElapsedTimeCitations(t *testing.T) {
+	bundle := turn.FactBundle{Facts: []game.Fact{
+		{ID: "f005", Kind: game.FactElapsedTime, Subject: "time", Value: "5", Text: "5 seconds pass.", Required: true},
+		{ID: "f035", Kind: game.FactElapsedTime, Subject: "time", Value: "35", Text: "35 seconds pass.", Required: true},
+	}}
+	raw := `{"sentences":[{"factIds":["f005"],"text":"Thirty-five seconds pass."},{"factIds":["f035"],"text":"Five seconds pass."}]}`
+
+	if _, reason := validateDraft(raw, bundle); reason != "unsupported_claim" {
+		t.Fatalf("validation reason = %q, want unsupported_claim", reason)
+	}
+}
+
+func TestValidateDraftRejectsCrossCitedEntity(t *testing.T) {
+	bundle := turn.FactBundle{Facts: []game.Fact{
+		{ID: "f001", Kind: game.FactAction, Subject: "Reception Desk", Value: "searched", Text: "I search Reception Desk.", Required: true},
+		{ID: "f002", Kind: game.FactAction, Subject: "Storage Cabinet", Value: "searched", Text: "I search Storage Cabinet.", Required: true},
+	}}
+	raw := `{"sentences":[{"factIds":["f001"],"text":"I search Storage Cabinet."},{"factIds":["f002"],"text":"I search Reception Desk."}]}`
+
+	if _, reason := validateDraft(raw, bundle); reason != "unknown_entity" {
+		t.Fatalf("validation reason = %q, want unknown_entity", reason)
+	}
+}
+
+func TestValidateDraftRejectsCrossCitedAction(t *testing.T) {
+	bundle := turn.FactBundle{Facts: []game.Fact{
+		{ID: "f001", Kind: game.FactAction, Subject: "action", Value: "waited", Text: "I wait here.", Required: true},
+		{ID: "f002", Kind: game.FactAction, Subject: "action", Value: "listened", Text: "I listen carefully.", Required: true},
+	}}
+	raw := `{"sentences":[{"factIds":["f001"],"text":"I listen carefully."},{"factIds":["f002"],"text":"I wait here."}]}`
+
+	if _, reason := validateDraft(raw, bundle); reason != "unsupported_claim" {
+		t.Fatalf("validation reason = %q, want unsupported_claim", reason)
+	}
+}
+
+func TestValidateDraftReportsUnknownCitedIDBeforeContentChecks(t *testing.T) {
+	bundle := turn.FactBundle{Facts: []game.Fact{{
+		ID: "f001", Kind: game.FactAction, Subject: "action", Value: "waited", Text: "I wait here.", Required: true,
+	}}}
+	raw := `{"sentences":[{"factIds":["unknown"],"text":"Basement Monster attacks."}]}`
+
+	if _, reason := validateDraft(raw, bundle); reason != "unknown_fact_id" {
+		t.Fatalf("validation reason = %q, want unknown_fact_id", reason)
 	}
 }
 
