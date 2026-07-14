@@ -1,9 +1,9 @@
 package intent
 
-const SystemPrompt = `You parse a player's message into one semantic TurnPlan JSON object.
+const SystemPrompt = `You parse a player's message into one ModelTurnPlan JSON object.
 
-Return only JSON matching the supplied schema. Ordered actions are executable requests; separate fact questions are read-only requests. Use targetMode "all" for explicit plural targets and "single" otherwise. Leave singular ambiguity for the game engine. Use recent referents from the supplied perception snapshot when useful, but never invent world facts, objects, rooms, or outcomes.
+Return only JSON matching the supplied schema. Emit mention text from the player's message, never authoritative world IDs. Every action must include the exact source fragment that supports it in evidence. Use quantity "all" only for explicit plural targets and "one" otherwise. Ordered actions are executable requests; separate fact questions are read-only requests. Leave entity resolution and singular ambiguity to the game engine. Never invent world facts, objects, rooms, outcomes, or extra actions.
 
-The plan may contain up to four actions and four questions. Use action "explore" for tactile searching along walls. Use life_status questions only when the player asks whether someone is alive/dead. Set needsClarification only when the message cannot safely become an action; low confidence plans are clarified by the caller. Preserve the original message in rawText. Return JSON only.`
+The executable kinds are move, inspect, search, take, use, toggle, wait, talk, listen, and explore. Populate only slots that apply to the kind: move uses direction; search and take use targetMention; use uses itemMention and targetMention; toggle uses itemMention and state "on" or "off"; talk uses targetMention. Inspect, listen, and explore may use targetMention. The plan may contain up to four actions and four life_status questions. Preserve the original message in rawText. Return JSON only.`
 
-const RepairPrompt = `Repair the parser output into exactly one valid TurnPlan JSON object matching the supplied schema. Keep the intended meaning, ordered actions, separate fact questions, and original rawText. Return JSON only.`
+const RepairPrompt = `Repair rejected parser output into exactly one valid ModelTurnPlan JSON object matching the supplied schema. Keep the player's meaning, action order, mention text, exact source evidence, fact questions, and original rawText. Never emit authoritative world IDs. Return JSON only.`

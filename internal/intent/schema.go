@@ -24,3 +24,43 @@ var TurnPlanSchema = map[string]any{
 		"clarificationQuestion": map[string]any{"type": "string"}, "rawText": map[string]any{"type": "string"},
 	},
 }
+
+var modelActionKinds = []any{"move", "inspect", "search", "take", "use", "toggle", "wait", "talk", "listen", "explore"}
+
+var ModelTurnPlanSchema = map[string]any{
+	"type": "object", "additionalProperties": false,
+	"required": []string{"actions", "questions", "rawText", "needsClarification", "clarificationQuestion"},
+	"properties": map[string]any{
+		"actions": map[string]any{
+			"type": "array", "maxItems": 4,
+			"items": map[string]any{
+				"type": "object", "additionalProperties": false,
+				"required": []string{"kind", "targetMention", "itemMention", "direction", "state", "evidence", "quantity"},
+				"properties": map[string]any{
+					"kind":          map[string]any{"type": "string", "enum": modelActionKinds},
+					"targetMention": map[string]any{"type": "string"},
+					"itemMention":   map[string]any{"type": "string"},
+					"direction":     map[string]any{"type": "string"},
+					"state":         map[string]any{"type": "string", "enum": []any{"", "on", "off"}},
+					"evidence":      map[string]any{"type": "string"},
+					"quantity":      map[string]any{"type": "string", "enum": []any{"one", "all"}},
+				},
+			},
+		},
+		"questions": map[string]any{
+			"type": "array", "maxItems": 4,
+			"items": map[string]any{
+				"type": "object", "additionalProperties": false,
+				"required": []string{"kind", "targetMention", "quantity"},
+				"properties": map[string]any{
+					"kind":          map[string]any{"type": "string", "enum": []any{"life_status"}},
+					"targetMention": map[string]any{"type": "string"},
+					"quantity":      map[string]any{"type": "string", "enum": []any{"one", "all"}},
+				},
+			},
+		},
+		"rawText":               map[string]any{"type": "string"},
+		"needsClarification":    map[string]any{"type": "boolean"},
+		"clarificationQuestion": map[string]any{"type": "string"},
+	},
+}
