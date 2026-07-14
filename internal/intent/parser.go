@@ -40,8 +40,167 @@ type ParseProvenance struct {
 	FallbackError error
 }
 
+type SemanticProvenance struct {
+	Source           ParseSource
+	RawPlan          ModelTurnPlan
+	HasRawPlan       bool
+	ValidationErrors []ValidationError
+	RepairReason     error
+	FallbackError    error
+}
+
+type semanticParseAttempt struct {
+	plan             SemanticPlan
+	rawPlan          ModelTurnPlan
+	hasRawPlan       bool
+	validationErrors []ValidationError
+	err              error
+}
+
 func NewParser(generator StructuredGenerator) Parser {
 	return Parser{generator: generator}
+}
+
+func (p Parser) ParseSemanticWithProvenance(ctx context.Context, message string, snapshot game.PerceptionSnapshot) (SemanticPlan, SemanticProvenance, error) {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return SemanticPlan{}, SemanticProvenance{}, ErrEmptyMessage
+	}
+	if p.generator == nil {
+		return semanticParserFallback(message, SemanticProvenance{
+			FallbackError: errors.New("intent parser has no generator"),
+		})
+	}
+
+	payload, err := json.Marshal(struct {
+		Player     string                  `json:"player"`
+		Perception game.PerceptionSnapshot `json:"perception"`
+	}{message, snapshot})
+	if err != nil {
+		return SemanticPlan{}, SemanticProvenance{}, fmt.Errorf("encode semantic parser input: %w", err)
+	}
+
+	raw, err := p.generator.GenerateJSON(ctx, SystemPrompt, string(payload), ModelTurnPlanSchema)
+	if err != nil {
+		return semanticParserFallback(message, SemanticProvenance{
+			FallbackError: fmt.Errorf("generate semantic plan: %w", err),
+		})
+	}
+
+	initial := parseSemanticAttempt(message, raw)
+	if initial.err == nil {
+		return initial.plan, SemanticProvenance{
+			Source:     ParseSourceModel,
+			RawPlan:    initial.rawPlan,
+			HasRawPlan: initial.hasRawPlan,
+		}, nil
+	}
+
+	repairPayload, err := json.Marshal(struct {
+		Player           string                  `json:"player"`
+		Perception       game.PerceptionSnapshot `json:"perception"`
+		RejectedOutput   string                  `json:"rejectedOutput"`
+		RejectedPlan     ModelTurnPlan           `json:"rejectedPlan"`
+		HasRejectedPlan  bool                    `json:"hasRejectedPlan"`
+		ValidationErrors []ValidationError       `json:"validationErrors"`
+	}{
+		Player:           message,
+		Perception:       snapshot,
+		RejectedOutput:   raw,
+		RejectedPlan:     initial.rawPlan,
+		HasRejectedPlan:  initial.hasRawPlan,
+		ValidationErrors: initial.validationErrors,
+	})
+	if err != nil {
+		return semanticParserFallback(message, failedSemanticProvenance(
+			initial,
+			fmt.Errorf("encode semantic repair input: %w", err),
+		))
+	}
+
+	repairedRaw, err := p.generator.GenerateJSON(ctx, RepairPrompt, string(repairPayload), ModelTurnPlanSchema)
+	if err != nil {
+		return semanticParserFallback(message, failedSemanticProvenance(
+			initial,
+			fmt.Errorf("generate repaired semantic plan: %w", err),
+		))
+	}
+
+	repaired := parseSemanticAttempt(message, repairedRaw)
+	if repaired.err != nil {
+		provenance := failedSemanticProvenance(
+			initial,
+			fmt.Errorf("validate repaired semantic plan: %w", repaired.err),
+		)
+		if repaired.hasRawPlan {
+			provenance.RawPlan = repaired.rawPlan
+			provenance.HasRawPlan = true
+		}
+		return semanticParserFallback(message, provenance)
+	}
+
+	return repaired.plan, SemanticProvenance{
+		Source:           ParseSourceRepair,
+		RawPlan:          repaired.rawPlan,
+		HasRawPlan:       true,
+		ValidationErrors: append([]ValidationError(nil), initial.validationErrors...),
+		RepairReason:     initial.err,
+	}, nil
+}
+
+func parseSemanticAttempt(message, raw string) semanticParseAttempt {
+	model, err := ParseModelPlanJSON(raw)
+	if err != nil {
+		problem := ValidationError{
+			Action:  -1,
+			Field:   "plan",
+			Code:    "decode_error",
+			Message: err.Error(),
+		}
+		return semanticParseAttempt{
+			validationErrors: []ValidationError{problem},
+			err:              fmt.Errorf("decode semantic plan: %w", err),
+		}
+	}
+
+	plan, problems := CompileModelPlan(message, model)
+	if len(problems) != 0 {
+		encoded, _ := json.Marshal(problems)
+		return semanticParseAttempt{
+			rawPlan:          model,
+			hasRawPlan:       true,
+			validationErrors: append([]ValidationError(nil), problems...),
+			err:              fmt.Errorf("compile semantic plan: %s", encoded),
+		}
+	}
+
+	return semanticParseAttempt{
+		plan:       plan,
+		rawPlan:    model,
+		hasRawPlan: true,
+	}
+}
+
+func failedSemanticProvenance(initial semanticParseAttempt, fallbackErr error) SemanticProvenance {
+	return SemanticProvenance{
+		Source:           ParseSourceFallback,
+		RawPlan:          initial.rawPlan,
+		HasRawPlan:       initial.hasRawPlan,
+		ValidationErrors: append([]ValidationError(nil), initial.validationErrors...),
+		RepairReason:     initial.err,
+		FallbackError:    fallbackErr,
+	}
+}
+
+func semanticParserFallback(message string, provenance SemanticProvenance) (SemanticPlan, SemanticProvenance, error) {
+	provenance.Source = ParseSourceFallback
+	return SemanticPlan{
+		Actions:               []SemanticAction{},
+		Questions:             []FactQuestion{},
+		RawText:               message,
+		NeedsClarification:    true,
+		ClarificationQuestion: defaultClarification,
+	}, provenance, nil
 }
 
 func (p Parser) Parse(ctx context.Context, message string, snapshot game.PerceptionSnapshot) (TurnPlan, error) {
