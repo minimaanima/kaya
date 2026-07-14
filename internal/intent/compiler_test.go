@@ -1,6 +1,7 @@
 package intent
 
 import (
+	"encoding/json"
 	"testing"
 )
 
@@ -199,6 +200,135 @@ func TestParseModelPlanJSONRejectsInvalidShape(t *testing.T) {
 	}
 }
 
+func TestParseModelPlanJSONRejectsMissingRequiredProperties(t *testing.T) {
+	for _, field := range []string{"actions", "questions", "rawText", "needsClarification", "clarificationQuestion"} {
+		t.Run("top level "+field, func(t *testing.T) {
+			document := validModelPlanDocument()
+			delete(document, field)
+			requireModelPlanDecodeError(t, document)
+		})
+	}
+
+	for _, field := range []string{"kind", "targetMention", "itemMention", "direction", "state", "evidence", "quantity"} {
+		t.Run("action "+field, func(t *testing.T) {
+			document := validModelPlanDocument()
+			action := document["actions"].([]any)[0].(map[string]any)
+			delete(action, field)
+			requireModelPlanDecodeError(t, document)
+		})
+	}
+
+	for _, field := range []string{"kind", "targetMention", "quantity"} {
+		t.Run("question "+field, func(t *testing.T) {
+			document := validModelPlanDocument()
+			document["questions"] = []any{validModelQuestionDocument()}
+			question := document["questions"].([]any)[0].(map[string]any)
+			delete(question, field)
+			requireModelPlanDecodeError(t, document)
+		})
+	}
+}
+
+func TestParseModelPlanJSONRejectsNullAndWrongShapes(t *testing.T) {
+	tests := []struct {
+		name   string
+		raw    string
+		mutate func(map[string]any)
+	}{
+		{name: "null document", raw: "null"},
+		{name: "null actions", mutate: func(document map[string]any) { document["actions"] = nil }},
+		{name: "null questions", mutate: func(document map[string]any) { document["questions"] = nil }},
+		{name: "actions object", mutate: func(document map[string]any) { document["actions"] = map[string]any{} }},
+		{name: "questions object", mutate: func(document map[string]any) { document["questions"] = map[string]any{} }},
+		{name: "null action", mutate: func(document map[string]any) { document["actions"] = []any{nil} }},
+		{name: "null question", mutate: func(document map[string]any) { document["questions"] = []any{nil} }},
+		{name: "null raw text", mutate: func(document map[string]any) { document["rawText"] = nil }},
+		{name: "numeric raw text", mutate: func(document map[string]any) { document["rawText"] = 7 }},
+		{name: "string clarification flag", mutate: func(document map[string]any) { document["needsClarification"] = "false" }},
+		{name: "numeric action evidence", mutate: func(document map[string]any) {
+			document["actions"].([]any)[0].(map[string]any)["evidence"] = 7
+		}},
+		{name: "array question target", mutate: func(document map[string]any) {
+			document["questions"] = []any{validModelQuestionDocument()}
+			document["questions"].([]any)[0].(map[string]any)["targetMention"] = []any{}
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.raw != "" {
+				if _, err := ParseModelPlanJSON(tt.raw); err == nil {
+					t.Fatal("expected decode error")
+				}
+				return
+			}
+			document := validModelPlanDocument()
+			tt.mutate(document)
+			requireModelPlanDecodeError(t, document)
+		})
+	}
+}
+
+func TestParseModelPlanJSONRejectsInvalidEnumsAndQuestionTargets(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{name: "action quantity", mutate: func(document map[string]any) {
+			document["actions"].([]any)[0].(map[string]any)["quantity"] = "banana"
+		}},
+		{name: "action state", mutate: func(document map[string]any) {
+			document["actions"].([]any)[0].(map[string]any)["state"] = "maybe"
+		}},
+		{name: "question kind", mutate: func(document map[string]any) {
+			document["questions"] = []any{validModelQuestionDocument()}
+			document["questions"].([]any)[0].(map[string]any)["kind"] = "weather"
+		}},
+		{name: "question quantity", mutate: func(document map[string]any) {
+			document["questions"] = []any{validModelQuestionDocument()}
+			document["questions"].([]any)[0].(map[string]any)["quantity"] = "banana"
+		}},
+		{name: "empty question target", mutate: func(document map[string]any) {
+			document["questions"] = []any{validModelQuestionDocument()}
+			document["questions"].([]any)[0].(map[string]any)["targetMention"] = ""
+		}},
+		{name: "whitespace question target", mutate: func(document map[string]any) {
+			document["questions"] = []any{validModelQuestionDocument()}
+			document["questions"].([]any)[0].(map[string]any)["targetMention"] = "  \t"
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			document := validModelPlanDocument()
+			tt.mutate(document)
+			requireModelPlanDecodeError(t, document)
+		})
+	}
+}
+
+func TestParseModelPlanJSONRejectsTooManyActionsAndQuestions(t *testing.T) {
+	t.Run("actions", func(t *testing.T) {
+		document := validModelPlanDocument()
+		actions := make([]any, 5)
+		for index := range actions {
+			actions[index] = validModelActionDocument()
+		}
+		document["actions"] = actions
+		requireModelPlanDecodeError(t, document)
+	})
+
+	t.Run("questions", func(t *testing.T) {
+		document := validModelPlanDocument()
+		questions := make([]any, 5)
+		for index := range questions {
+			questions[index] = validModelQuestionDocument()
+		}
+		document["questions"] = questions
+		requireModelPlanDecodeError(t, document)
+	})
+}
+
 func FuzzCompileModelPlanNeverPanics(f *testing.F) {
 	f.Add("look around", "inspect", "look around")
 	f.Fuzz(func(t *testing.T, message, kind, evidence string) {
@@ -214,4 +344,45 @@ func requireProblem(t *testing.T, problems []ValidationError, field, code string
 		}
 	}
 	t.Fatalf("missing problem field=%q code=%q in %#v", field, code, problems)
+}
+
+func validModelPlanDocument() map[string]any {
+	return map[string]any{
+		"actions":               []any{validModelActionDocument()},
+		"questions":             []any{},
+		"rawText":               "inspect the desk",
+		"needsClarification":    false,
+		"clarificationQuestion": "",
+	}
+}
+
+func validModelActionDocument() map[string]any {
+	return map[string]any{
+		"kind":          "inspect",
+		"targetMention": "the desk",
+		"itemMention":   "",
+		"direction":     "",
+		"state":         "",
+		"evidence":      "inspect the desk",
+		"quantity":      "one",
+	}
+}
+
+func validModelQuestionDocument() map[string]any {
+	return map[string]any{
+		"kind":          "life_status",
+		"targetMention": "the doctors",
+		"quantity":      "all",
+	}
+}
+
+func requireModelPlanDecodeError(t *testing.T, document map[string]any) {
+	t.Helper()
+	raw, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseModelPlanJSON(string(raw)); err == nil {
+		t.Fatalf("expected decode error for %s", raw)
+	}
 }
