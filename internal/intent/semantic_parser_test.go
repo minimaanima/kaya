@@ -319,6 +319,50 @@ func TestParseSemanticMalformedRepairClarifiesWithoutThirdCall(t *testing.T) {
 	}
 }
 
+func TestParseSemanticRepairGenerationErrorHasNoTerminalAttempt(t *testing.T) {
+	message := "search the desk"
+	initialInvalid := semanticModelPlanJSON(t, message, ModelAction{
+		Kind:          "search",
+		TargetMention: "the desk",
+		ItemMention:   "flashlight",
+		Evidence:      message,
+		Quantity:      TargetOne,
+	})
+	generator := &semanticRecordingGenerator{results: []semanticGeneratorResult{
+		{response: initialInvalid},
+		{err: errors.New("repair model unavailable")},
+		{response: semanticModelPlanJSON(t, message, ModelAction{Kind: "wait", Evidence: message, Quantity: TargetOne})},
+	}}
+
+	plan, provenance, err := NewParser(generator).ParseSemanticWithProvenance(
+		context.Background(), message, game.PerceptionSnapshot{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(generator.calls) != 2 {
+		t.Fatalf("generator calls = %d, want hard maximum of 2", len(generator.calls))
+	}
+	for index, call := range generator.calls {
+		if !reflect.DeepEqual(call.schema, ModelTurnPlanSchema) {
+			t.Fatalf("call %d schema = %#v, want ModelTurnPlanSchema", index, call.schema)
+		}
+	}
+	if len(plan.Actions) != 0 || !plan.NeedsClarification || plan.ClarificationQuestion == "" {
+		t.Fatalf("plan = %#v, want safe clarification", plan)
+	}
+	if provenance.Source != ParseSourceFallback || provenance.HasRawPlan || len(provenance.ValidationErrors) != 0 {
+		t.Fatalf("terminal provenance = %#v, repair generation produced no terminal attempt", provenance)
+	}
+	if !provenance.HasInitialRawPlan || len(provenance.InitialRawPlan.Actions) != 1 {
+		t.Fatalf("initial provenance = %#v, want rejected initial DTO", provenance)
+	}
+	requireSemanticProblem(t, provenance.InitialValidationErrors, "itemMention", "forbidden_slot")
+	if provenance.RepairReason == nil || provenance.FallbackError == nil {
+		t.Fatalf("provenance = %#v, want initial rejection and repair generation errors", provenance)
+	}
+}
+
 func TestParseSemanticGeneratorFailureDoesNotAttemptRepair(t *testing.T) {
 	generator := &semanticRecordingGenerator{results: []semanticGeneratorResult{
 		{err: errors.New("model unavailable")},

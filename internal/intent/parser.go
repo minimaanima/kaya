@@ -193,9 +193,6 @@ func parseSemanticAttempt(message, raw string) semanticParseAttempt {
 func failedSemanticProvenance(initial semanticParseAttempt, fallbackErr error) SemanticProvenance {
 	return SemanticProvenance{
 		Source:                  ParseSourceFallback,
-		RawPlan:                 initial.rawPlan,
-		HasRawPlan:              initial.hasRawPlan,
-		ValidationErrors:        append([]ValidationError(nil), initial.validationErrors...),
 		InitialRawPlan:          initial.rawPlan,
 		HasInitialRawPlan:       initial.hasRawPlan,
 		InitialValidationErrors: append([]ValidationError(nil), initial.validationErrors...),
