@@ -25,6 +25,7 @@ func (r Resolver) Resolve(in intent.Intent) game.ActionResult {
 	if r.state == nil {
 		return failed("missing_world", "The connection is unstable. I cannot read the room state.")
 	}
+	in = r.canonicalizeGroundedIDs(in)
 
 	if result, ok := r.autonomyResult(in); ok {
 		return result
@@ -61,6 +62,38 @@ func (r Resolver) Resolve(in intent.Intent) game.ActionResult {
 	}
 
 	return r.finish(result)
+}
+
+func (r Resolver) canonicalizeGroundedIDs(in intent.Intent) intent.Intent {
+	switch in.Action {
+	case intent.ActionInspect, intent.ActionSearch, intent.ActionTalk:
+		if object, ok := r.state.Objects[game.ObjectID(in.Target)]; ok {
+			in.Target = object.Name
+		}
+	case intent.ActionTakeItem:
+		if item, ok := r.state.Items[game.ItemID(in.Target)]; ok {
+			in.Target = item.Name
+		}
+		if item, ok := r.state.Items[game.ItemID(in.Item)]; ok {
+			in.Item = item.Name
+		}
+	case intent.ActionUseItem:
+		if item, ok := r.state.Items[game.ItemID(in.Item)]; ok {
+			in.Item = item.Name
+		}
+		if door, ok := r.state.Doors[game.DoorID(in.Target)]; ok {
+			in.Target = door.Name
+		}
+	case intent.ActionTurnOn, intent.ActionTurnOff:
+		if item, ok := r.state.Items[game.ItemID(in.Item)]; ok {
+			in.Item = item.Name
+		}
+	case intent.ActionListen:
+		if door, ok := r.state.Doors[game.DoorID(in.Target)]; ok {
+			in.Target = door.Name
+		}
+	}
+	return in
 }
 
 func (r Resolver) inspect(in intent.Intent) game.ActionResult {
