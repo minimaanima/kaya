@@ -1,6 +1,7 @@
 package turn
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -184,7 +185,11 @@ func referenceBinding(reference intent.Reference, role grounding.Role, supplied 
 	if !strings.HasPrefix(reference.Mention, prefix) {
 		return nil
 	}
-	return &grounding.Binding{Role: role, CandidateIDs: []string{strings.TrimPrefix(reference.Mention, prefix)}}
+	var ids []string
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(reference.Mention, prefix)), &ids); err != nil {
+		ids = nil
+	}
+	return &grounding.Binding{Role: role, CandidateIDs: ids}
 }
 
 func copyGroundingStop(target *grounding.Result, source grounding.Result) bool {
@@ -197,9 +202,18 @@ func copyGroundingStop(target *grounding.Result, source grounding.Result) bool {
 func persistGroundedReferences(action intent.SemanticAction, references []grounding.GroundedReference) intent.SemanticAction {
 	setReference := func(reference intent.Reference, role grounding.Role) intent.Reference {
 		for _, grounded := range references {
-			if grounded.Role == role && len(grounded.Candidates) == 1 {
-				reference.Mention = persistedGroundingPrefix + string(role) + ":" + grounded.Candidates[0].ID
-				reference.Quantity = intent.TargetOne
+			if grounded.Role == role && len(grounded.Candidates) > 0 {
+				ids := make([]string, 0, len(grounded.Candidates))
+				for _, candidate := range grounded.Candidates {
+					ids = append(ids, candidate.ID)
+				}
+				encoded, _ := json.Marshal(ids)
+				reference.Mention = persistedGroundingPrefix + string(role) + ":" + string(encoded)
+				if len(ids) > 1 {
+					reference.Quantity = intent.TargetAll
+				} else {
+					reference.Quantity = intent.TargetOne
+				}
 			}
 		}
 		return reference

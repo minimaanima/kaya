@@ -143,6 +143,72 @@ func TestExecuteSemanticPreservesResolvedUseRoleAcrossSecondClarification(t *tes
 	}
 }
 
+func TestExecuteSemanticPreservesPluralUseBindingAcrossDoorClarification(t *testing.T) {
+	state, _, doorID := ambiguousUseState(t)
+	resolver := &semanticRecordingResolver{state: state}
+	executor := newExecutor(state, resolver)
+	plan := intent.SemanticPlan{Actions: []intent.SemanticAction{
+		intent.UseAction{Item: reference("key"), Target: reference("door"), Evidence: "use both keys on the door"},
+	}}
+	first := executor.ExecuteSemantic(plan, 0, nil)
+	itemIDs := pendingCandidateIDs(t, first.Pending, grounding.RoleItem)
+
+	second := executor.ExecuteSemantic(first.Pending.RemainingPlan, 0, &grounding.Binding{
+		Role: grounding.RoleItem, CandidateIDs: itemIDs,
+	})
+	if second.Pending == nil || second.Pending.Role != grounding.RoleDoor {
+		t.Fatalf("second pending = %#v, want door clarification", second.Pending)
+	}
+	if len(resolver.intents) != 0 || state.NowSeconds != 0 {
+		t.Fatalf("executed before both roles resolved: intents=%#v time=%d", resolver.intents, state.NowSeconds)
+	}
+
+	third := executor.ExecuteSemantic(second.Pending.RemainingPlan, 0, &grounding.Binding{
+		Role: grounding.RoleDoor, CandidateIDs: []string{string(doorID)},
+	})
+
+	if third.Pending != nil || len(third.Result.Outcomes) != 2 || len(resolver.intents) != 2 {
+		t.Fatalf("third execution = %#v intents=%#v, want both bound items", third, resolver.intents)
+	}
+	for index, in := range resolver.intents {
+		if in.Item != itemIDs[index] || in.Target != string(doorID) {
+			t.Fatalf("intent %d = %#v, want item %q on door %q", index, in, itemIDs[index], doorID)
+		}
+	}
+	if state.NowSeconds != 8 {
+		t.Fatalf("elapsed = %d, want exactly two resumed actions", state.NowSeconds)
+	}
+}
+
+func TestExecuteSemanticRejectsStaleMemberOfPersistedPluralUseBinding(t *testing.T) {
+	state, _, doorID := ambiguousUseState(t)
+	resolver := &semanticRecordingResolver{state: state}
+	executor := newExecutor(state, resolver)
+	plan := intent.SemanticPlan{Actions: []intent.SemanticAction{
+		intent.UseAction{Item: reference("key"), Target: reference("door"), Evidence: "use both keys on the door"},
+	}}
+	first := executor.ExecuteSemantic(plan, 0, nil)
+	itemIDs := pendingCandidateIDs(t, first.Pending, grounding.RoleItem)
+	second := executor.ExecuteSemantic(first.Pending.RemainingPlan, 0, &grounding.Binding{
+		Role: grounding.RoleItem, CandidateIDs: itemIDs,
+	})
+	if second.Pending == nil || second.Pending.Role != grounding.RoleDoor {
+		t.Fatalf("second pending = %#v, want door clarification", second.Pending)
+	}
+	state.RemoveInventory(game.ItemID(itemIDs[1]))
+
+	got := executor.ExecuteSemantic(second.Pending.RemainingPlan, 0, &grounding.Binding{
+		Role: grounding.RoleDoor, CandidateIDs: []string{string(doorID)},
+	})
+
+	if got.Pending != nil || len(got.Result.Outcomes) != 1 || got.Result.Outcomes[0].Result.Outcome != string(grounding.MissingReasonStaleBinding) {
+		t.Fatalf("execution = %#v, want stale persisted binding failure", got)
+	}
+	if len(resolver.intents) != 0 || state.NowSeconds != 0 {
+		t.Fatalf("stale binding executed: intents=%#v time=%d", resolver.intents, state.NowSeconds)
+	}
+}
+
 func TestExecuteSemanticPassesGroundedIDToCanonicalResolverBoundary(t *testing.T) {
 	state := scenario.NewPrototypeWorld()
 	desk := state.Objects[scenario.ObjectReceptionDesk]
@@ -475,4 +541,33 @@ func ambiguousUseState(t *testing.T) (*world.State, game.ItemID, game.DoorID) {
 		t.Fatal(err)
 	}
 	return state, keyA, doorB
+}
+
+func pendingCandidateIDs(t *testing.T, pending *PendingSemanticAction, role grounding.Role) []string {
+	t.Helper()
+	if pending == nil || pending.Role != role {
+		t.Fatalf("pending = %#v, want role %q", pending, role)
+	}
+	ids := make([]string, 0, len(pending.Candidates))
+	for _, candidate := range pending.Candidates {
+		ids = append(ids, candidate.ID)
+	}
+	return ids
+}
+
+type semanticRecordingResolver struct {
+	state   *world.State
+	intents []intent.Intent
+}
+
+func (r *semanticRecordingResolver) Resolve(in intent.Intent) game.ActionResult {
+	r.intents = append(r.intents, in)
+	result := game.ActionResult{
+		Status:           game.ActionSucceeded,
+		StartedAtSeconds: r.state.NowSeconds,
+		DurationSeconds:  4,
+		Outcome:          "recorded_use",
+	}
+	r.state.Advance(result.DurationSeconds)
+	return result
 }
