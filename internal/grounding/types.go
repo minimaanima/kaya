@@ -56,9 +56,22 @@ type Clarification struct {
 	Candidates []Candidate
 }
 
+type MissingReason string
+
+const (
+	MissingReasonUnresolved   MissingReason = "unresolved_reference"
+	MissingReasonStaleBinding MissingReason = "stale_binding"
+	MissingReasonBindingRole  MissingReason = "binding_role_mismatch"
+)
+
 type MissingReference struct {
-	Role    Role
-	Mention string
+	Role              Role
+	Mention           string
+	Quantity          intent.TargetMode
+	Reason            MissingReason
+	BoundCandidateIDs []string
+	StaleCandidateIDs []string
+	ExpectedRoles     []Role
 }
 
 type Result struct {

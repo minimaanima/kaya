@@ -81,6 +81,86 @@ func TestGroundResolvesRecentPronounsAndPluralReferences(t *testing.T) {
 	assertReadyIDs(t, plural, RoleObject, string(objectRelay), string(objectRelayShell))
 }
 
+func TestGroundDemonstrativeDoorUsesUniqueEligibleCandidate(t *testing.T) {
+	state := syntheticWorld()
+	got := New(state).Ground(intent.UseAction{
+		Item:   reference("phase spindle", intent.TargetOne),
+		Target: reference("that door", intent.TargetOne),
+	}, nil)
+
+	assertReadyIDs(t, got, RoleDoor, string(doorNorth))
+}
+
+func TestGroundDemonstrativeDoorPreservesEligibleAmbiguity(t *testing.T) {
+	state := syntheticWorld()
+	state.KnownExitDirections[testRoom]["southward"] = true
+	got := New(state).Ground(intent.UseAction{
+		Item:   reference("phase spindle", intent.TargetOne),
+		Target: reference("that door", intent.TargetOne),
+	}, nil)
+
+	if got.Clarification == nil || got.Clarification.Role != RoleDoor {
+		t.Fatalf("Ground() clarification = %#v, want door ambiguity", got.Clarification)
+	}
+	assertCandidateIDs(t, got.Clarification.Candidates, string(doorNorth), string(doorSouth))
+}
+
+func TestGroundDemonstrativeDoorHonorsExplicitBindingBeforeFallback(t *testing.T) {
+	state := syntheticWorld()
+	state.KnownExitDirections[testRoom]["southward"] = true
+	got := New(state).Ground(intent.UseAction{
+		Item:   reference("phase spindle", intent.TargetOne),
+		Target: reference("that door", intent.TargetOne),
+	}, &Binding{Role: RoleDoor, CandidateIDs: []string{string(doorSouth)}})
+
+	assertReadyIDs(t, got, RoleDoor, string(doorSouth))
+}
+
+func TestGroundDemonstrativeExitUsesUniqueEligibleCandidate(t *testing.T) {
+	state := syntheticWorld()
+	got := New(state).Ground(intent.MoveAction{Direction: "that exit"}, nil)
+
+	assertReadyIDs(t, got, RoleExit, "northward")
+}
+
+func TestGroundDemonstrativeExitPreservesEligibleAmbiguity(t *testing.T) {
+	state := syntheticWorld()
+	state.KnownExitDirections[testRoom]["southward"] = true
+	got := New(state).Ground(intent.MoveAction{Direction: "that exit"}, nil)
+
+	if got.Clarification == nil || got.Clarification.Role != RoleExit {
+		t.Fatalf("Ground() clarification = %#v, want exit ambiguity", got.Clarification)
+	}
+	assertCandidateIDs(t, got.Clarification.Candidates, "northward", "southward")
+}
+
+func TestGroundNonDemonstrativeExactMatchStillOutranksRecentReferent(t *testing.T) {
+	state := syntheticWorld()
+	state.RecentReferents = []game.ReferentGroup{{ObjectIDs: []game.ObjectID{objectRelayShell}}}
+
+	for _, mention := range []string{"Copper Relay", "signal crown"} {
+		got := New(state).Ground(intent.SearchAction{Target: reference(mention, intent.TargetOne)}, nil)
+		assertReadyIDs(t, got, RoleObject, string(objectRelay))
+	}
+}
+
+func TestGroundListenTargetsDoorAndExploreHasNoEntityTarget(t *testing.T) {
+	state := syntheticWorld()
+
+	listen := New(state).Ground(intent.ListenAction{Target: reference("polar iris", intent.TargetOne)}, nil)
+	assertReadyIDs(t, listen, RoleDoor, string(doorNorth))
+
+	untargetedListen := New(state).Ground(intent.ListenAction{}, nil)
+	if !untargetedListen.Ready() || len(untargetedListen.References) != 0 {
+		t.Fatalf("untargeted listen = %#v, want ready without references", untargetedListen)
+	}
+
+	explore := New(state).Ground(intent.ExploreAction{Target: reference("wall tracery", intent.TargetOne)}, nil)
+	if !explore.Ready() || len(explore.References) != 0 {
+		t.Fatalf("explore = %#v, want ready without entity references", explore)
+	}
+}
+
 func TestGroundUsesCandidateBoundIDs(t *testing.T) {
 	state := syntheticWorld()
 	action := intent.SearchAction{Target: reference("relay", intent.TargetOne)}
@@ -92,6 +172,59 @@ func TestGroundUsesCandidateBoundIDs(t *testing.T) {
 	missing := New(state).Ground(action, &Binding{Role: RoleObject, CandidateIDs: []string{"not_permitted"}})
 	if missing.Missing == nil || missing.Missing.Role != RoleObject {
 		t.Fatalf("Ground() missing = %#v, want bound object failure", missing.Missing)
+	}
+}
+
+func TestGroundTargetAllBindingRejectsPartiallyStaleObjectSelection(t *testing.T) {
+	state := syntheticWorld()
+	room := state.Rooms[testRoom]
+	room.Objects = []game.ObjectID{objectRelay, objectVeiled, objectCradle}
+	state.Rooms[testRoom] = room
+	boundIDs := []string{string(objectRelay), string(objectRelayShell)}
+
+	got := New(state).Ground(
+		intent.SearchAction{Target: reference("relay", intent.TargetAll)},
+		&Binding{Role: RoleObject, CandidateIDs: boundIDs},
+	)
+
+	assertStaleBinding(t, got, RoleObject, intent.TargetAll, boundIDs, string(objectRelayShell))
+	if len(got.References) != 0 {
+		t.Fatalf("Ground() references = %#v, want no narrowed object selection", got.References)
+	}
+}
+
+func TestGroundTargetAllBindingRejectsPartiallyStaleDoorSelection(t *testing.T) {
+	state := syntheticWorld()
+	boundIDs := []string{string(doorNorth), string(doorSouth)}
+
+	got := New(state).Ground(intent.UseAction{
+		Item:   reference("phase spindle", intent.TargetOne),
+		Target: reference("iris hatch", intent.TargetAll),
+	}, &Binding{Role: RoleDoor, CandidateIDs: boundIDs})
+
+	assertStaleBinding(t, got, RoleDoor, intent.TargetAll, boundIDs, string(doorSouth))
+	assertReferenceIDs(t, got, RoleItem, string(itemCarried))
+}
+
+func TestGroundRejectsBindingForUnexpectedActionRole(t *testing.T) {
+	state := syntheticWorld()
+	boundIDs := []string{string(doorNorth)}
+	got := New(state).Ground(
+		intent.SearchAction{Target: reference("Copper Relay", intent.TargetOne)},
+		&Binding{Role: RoleDoor, CandidateIDs: boundIDs},
+	)
+
+	if got.Missing == nil || got.Missing.Reason != MissingReasonBindingRole {
+		t.Fatalf("Ground() missing = %#v, want binding-role failure", got.Missing)
+	}
+	if !reflect.DeepEqual(got.Missing.BoundCandidateIDs, boundIDs) {
+		t.Fatalf("bound IDs = %v, want %v", got.Missing.BoundCandidateIDs, boundIDs)
+	}
+	if !reflect.DeepEqual(got.Missing.ExpectedRoles, []Role{RoleObject}) {
+		t.Fatalf("expected roles = %v, want [%s]", got.Missing.ExpectedRoles, RoleObject)
+	}
+	if len(got.References) != 0 {
+		t.Fatalf("Ground() references = %#v, want no ordinary mention fallback", got.References)
 	}
 }
 
@@ -327,6 +460,22 @@ func assertCandidateIDs(t *testing.T, candidates []Candidate, want ...string) {
 	sort.Strings(want)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("candidate IDs = %v, want %v", got, want)
+	}
+}
+
+func assertStaleBinding(t *testing.T, got Result, role Role, quantity intent.TargetMode, boundIDs []string, staleIDs ...string) {
+	t.Helper()
+	if got.Missing == nil || got.Missing.Reason != MissingReasonStaleBinding {
+		t.Fatalf("Ground() missing = %#v, want stale binding", got.Missing)
+	}
+	if got.Missing.Role != role || got.Missing.Quantity != quantity {
+		t.Fatalf("missing role/quantity = %q/%q, want %q/%q", got.Missing.Role, got.Missing.Quantity, role, quantity)
+	}
+	if !reflect.DeepEqual(got.Missing.BoundCandidateIDs, boundIDs) {
+		t.Fatalf("bound IDs = %v, want %v", got.Missing.BoundCandidateIDs, boundIDs)
+	}
+	if !reflect.DeepEqual(got.Missing.StaleCandidateIDs, staleIDs) {
+		t.Fatalf("stale IDs = %v, want %v", got.Missing.StaleCandidateIDs, staleIDs)
 	}
 }
 

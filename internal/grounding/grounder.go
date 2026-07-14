@@ -35,6 +35,20 @@ func (g Grounder) Ground(action intent.SemanticAction, binding *Binding) Result 
 		result.Err = ErrUnsupportedAction
 		return result
 	}
+	expectedRoles, supported := semanticActionRoles(action)
+	if !supported {
+		result.Err = ErrUnsupportedAction
+		return result
+	}
+	if binding != nil && !containsRole(expectedRoles, binding.Role) {
+		result.Missing = &MissingReference{
+			Role:              binding.Role,
+			Reason:            MissingReasonBindingRole,
+			BoundCandidateIDs: append([]string(nil), binding.CandidateIDs...),
+			ExpectedRoles:     append([]Role(nil), expectedRoles...),
+		}
+		return result
+	}
 
 	view, err := g.state.GroundingView()
 	if err != nil {
@@ -62,9 +76,9 @@ func (g Grounder) Ground(action intent.SemanticAction, binding *Binding) Result 
 	case *intent.MoveAction:
 		ground(RoleExit, intent.Reference{Mention: typed.Direction, Quantity: intent.TargetOne}, exitCandidates(view))
 	case intent.InspectAction:
-		g.groundOptionalObject(&result, typed.Target, view, binding)
+		groundOptionalReference(&result, RoleObject, typed.Target, objectCandidates(view), view, binding)
 	case *intent.InspectAction:
-		g.groundOptionalObject(&result, typed.Target, view, binding)
+		groundOptionalReference(&result, RoleObject, typed.Target, objectCandidates(view), view, binding)
 	case intent.SearchAction:
 		ground(RoleObject, typed.Target, objectCandidates(view))
 	case *intent.SearchAction:
@@ -90,14 +104,10 @@ func (g Grounder) Ground(action intent.SemanticAction, binding *Binding) Result 
 	case *intent.TalkAction:
 		ground(RoleObject, typed.Target, objectCandidates(view))
 	case intent.ListenAction:
-		g.groundOptionalObject(&result, typed.Target, view, binding)
+		groundOptionalReference(&result, RoleDoor, typed.Target, doorCandidates(view), view, binding)
 	case *intent.ListenAction:
-		g.groundOptionalObject(&result, typed.Target, view, binding)
-	case intent.ExploreAction:
-		g.groundOptionalObject(&result, typed.Target, view, binding)
-	case *intent.ExploreAction:
-		g.groundOptionalObject(&result, typed.Target, view, binding)
-	case intent.WaitAction, *intent.WaitAction:
+		groundOptionalReference(&result, RoleDoor, typed.Target, doorCandidates(view), view, binding)
+	case intent.ExploreAction, *intent.ExploreAction, intent.WaitAction, *intent.WaitAction:
 	default:
 		result.Err = ErrUnsupportedAction
 	}
@@ -105,11 +115,11 @@ func (g Grounder) Ground(action intent.SemanticAction, binding *Binding) Result 
 	return result
 }
 
-func (g Grounder) groundOptionalObject(result *Result, reference intent.Reference, view world.GroundingView, binding *Binding) {
-	if strings.TrimSpace(reference.Mention) == "" && (binding == nil || binding.Role != RoleObject) {
+func groundOptionalReference(result *Result, role Role, reference intent.Reference, candidates []Candidate, view world.GroundingView, binding *Binding) {
+	if strings.TrimSpace(reference.Mention) == "" && (binding == nil || binding.Role != role) {
 		return
 	}
-	resolved, clarification, missing := resolveReference(reference, RoleObject, objectCandidates(view), view, binding)
+	resolved, clarification, missing := resolveReference(reference, role, candidates, view, binding)
 	result.Clarification = clarification
 	result.Missing = missing
 	if clarification == nil && missing == nil {
@@ -125,9 +135,16 @@ func resolveReference(reference intent.Reference, role Role, candidates []Candid
 	}
 
 	if binding != nil && binding.Role == role {
-		bound := candidatesByID(candidates, binding.CandidateIDs)
-		if len(bound) == 0 {
-			return GroundedReference{}, nil, &MissingReference{Role: role, Mention: mention}
+		bound, stale := revalidateCandidateIDs(candidates, binding.CandidateIDs)
+		if len(binding.CandidateIDs) == 0 || len(stale) > 0 {
+			return GroundedReference{}, nil, &MissingReference{
+				Role:              role,
+				Mention:           mention,
+				Quantity:          quantity,
+				Reason:            MissingReasonStaleBinding,
+				BoundCandidateIDs: append([]string(nil), binding.CandidateIDs...),
+				StaleCandidateIDs: stale,
+			}
 		}
 		return GroundedReference{Role: role, Mention: mention, Quantity: quantity, Candidates: bound}, nil, nil
 	}
@@ -135,8 +152,14 @@ func resolveReference(reference intent.Reference, role Role, candidates []Candid
 	pronoun := referencePronoun(mention)
 	if pronoun != pronounNone {
 		recent := recentCandidates(role, pronoun, candidates, view)
+		if len(recent) == 0 && len(candidates) == 0 {
+			return GroundedReference{}, nil, unresolvedReference(role, mention, quantity)
+		}
 		if len(recent) == 0 {
-			return GroundedReference{}, nil, &MissingReference{Role: role, Mention: mention}
+			recent = cloneCandidates(candidates)
+			if len(recent) > 1 {
+				return GroundedReference{}, &Clarification{Role: role, Mention: mention, Candidates: recent}, nil
+			}
 		}
 		if quantity != intent.TargetAll && len(recent) > 1 {
 			return GroundedReference{}, &Clarification{Role: role, Mention: mention, Candidates: recent}, nil
@@ -146,7 +169,7 @@ func resolveReference(reference intent.Reference, role Role, candidates []Candid
 
 	matches := rankedMatches(mention, candidates)
 	if len(matches) == 0 {
-		return GroundedReference{}, nil, &MissingReference{Role: role, Mention: mention}
+		return GroundedReference{}, nil, unresolvedReference(role, mention, quantity)
 	}
 	if quantity != intent.TargetAll && len(matches) > 1 {
 		return GroundedReference{}, &Clarification{Role: role, Mention: mention, Candidates: matches}, nil
@@ -294,12 +317,25 @@ func recentCandidates(role Role, pronoun pronounKind, candidates []Candidate, vi
 	return nil
 }
 
-func candidatesByID(candidates []Candidate, ids []string) []Candidate {
+func revalidateCandidateIDs(candidates []Candidate, ids []string) ([]Candidate, []string) {
 	eligible := make(map[string]Candidate, len(candidates))
 	for _, candidate := range candidates {
 		eligible[candidate.ID] = candidate
 	}
-	return candidatesByIDMap(eligible, ids)
+	seen := make(map[string]bool, len(ids))
+	selected := make([]Candidate, 0, len(ids))
+	stale := make([]string, 0)
+	for _, id := range ids {
+		candidate, ok := eligible[id]
+		if id == "" || !ok || seen[id] {
+			stale = append(stale, id)
+			continue
+		}
+		seen[id] = true
+		selected = append(selected, cloneCandidate(candidate))
+	}
+	sortCandidates(selected)
+	return selected, stale
 }
 
 func candidatesByIDMap(eligible map[string]Candidate, ids []string) []Candidate {
@@ -371,6 +407,15 @@ func cloneCandidate(candidate Candidate) Candidate {
 	return candidate
 }
 
+func cloneCandidates(candidates []Candidate) []Candidate {
+	cloned := make([]Candidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		cloned = append(cloned, cloneCandidate(candidate))
+	}
+	sortCandidates(cloned)
+	return cloned
+}
+
 func sortCandidates(candidates []Candidate) {
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].Kind != candidates[j].Kind {
@@ -378,4 +423,45 @@ func sortCandidates(candidates []Candidate) {
 		}
 		return candidates[i].ID < candidates[j].ID
 	})
+}
+
+func unresolvedReference(role Role, mention string, quantity intent.TargetMode) *MissingReference {
+	return &MissingReference{
+		Role:     role,
+		Mention:  mention,
+		Quantity: quantity,
+		Reason:   MissingReasonUnresolved,
+	}
+}
+
+func semanticActionRoles(action intent.SemanticAction) ([]Role, bool) {
+	switch action.(type) {
+	case intent.MoveAction, *intent.MoveAction:
+		return []Role{RoleExit}, true
+	case intent.InspectAction, *intent.InspectAction,
+		intent.SearchAction, *intent.SearchAction,
+		intent.TalkAction, *intent.TalkAction:
+		return []Role{RoleObject}, true
+	case intent.TakeAction, *intent.TakeAction,
+		intent.ToggleAction, *intent.ToggleAction:
+		return []Role{RoleItem}, true
+	case intent.UseAction, *intent.UseAction:
+		return []Role{RoleItem, RoleDoor}, true
+	case intent.ListenAction, *intent.ListenAction:
+		return []Role{RoleDoor}, true
+	case intent.ExploreAction, *intent.ExploreAction,
+		intent.WaitAction, *intent.WaitAction:
+		return nil, true
+	default:
+		return nil, false
+	}
+}
+
+func containsRole(roles []Role, wanted Role) bool {
+	for _, role := range roles {
+		if role == wanted {
+			return true
+		}
+	}
+	return false
 }
