@@ -103,6 +103,7 @@ func TestParseClarificationReturnsTypedDecisions(t *testing.T) {
 type scriptedSessionParser struct {
 	plans                   map[string]intent.SemanticPlan
 	decisions               map[string]intent.ClarificationDecision
+	clarificationErrors     map[string]error
 	semanticMessages        []string
 	clarificationMessages   []string
 	clarificationCandidates [][]intent.CandidateView
@@ -128,6 +129,9 @@ func (p *scriptedSessionParser) ParseClarification(
 ) (intent.ClarificationDecision, error) {
 	p.clarificationMessages = append(p.clarificationMessages, message)
 	p.clarificationCandidates = append(p.clarificationCandidates, append([]intent.CandidateView(nil), candidates...))
+	if err := p.clarificationErrors[message]; err != nil {
+		return intent.ClarificationDecision{}, err
+	}
 	decision, ok := p.decisions[message]
 	if !ok {
 		return intent.ClarificationDecision{}, errors.New("unexpected clarification parse")
@@ -353,6 +357,265 @@ func TestSessionResumesExactActionWithoutReplayingTimeOrEvents(t *testing.T) {
 	if state.NowSeconds != 40 || len(state.ScheduledEvents) != 0 {
 		t.Fatalf("time=%d scheduled=%#v", state.NowSeconds, state.ScheduledEvents)
 	}
+}
+
+func TestCloneSemanticPlanDeepClonesEveryConcreteAction(t *testing.T) {
+	actions := []struct {
+		name   string
+		action intent.SemanticAction
+	}{
+		{name: "move", action: &intent.MoveAction{Direction: "north", Evidence: "go north"}},
+		{name: "inspect", action: &intent.InspectAction{Target: intent.Reference{Mention: "desk", Quantity: intent.TargetOne}, Evidence: "inspect desk"}},
+		{name: "search", action: &intent.SearchAction{Target: intent.Reference{Mention: "desk", Quantity: intent.TargetOne}, Evidence: "search desk"}},
+		{name: "take", action: &intent.TakeAction{Target: intent.Reference{Mention: "key", Quantity: intent.TargetOne}, Evidence: "take key"}},
+		{name: "use", action: &intent.UseAction{Item: intent.Reference{Mention: "key", Quantity: intent.TargetOne}, Target: intent.Reference{Mention: "door", Quantity: intent.TargetOne}, Evidence: "use key"}},
+		{name: "toggle", action: &intent.ToggleAction{Item: intent.Reference{Mention: "light", Quantity: intent.TargetOne}, State: "on", Evidence: "turn on light"}},
+		{name: "wait", action: &intent.WaitAction{Evidence: "wait"}},
+		{name: "talk", action: &intent.TalkAction{Target: intent.Reference{Mention: "doctor", Quantity: intent.TargetOne}, Evidence: "talk"}},
+		{name: "listen", action: &intent.ListenAction{Target: intent.Reference{Mention: "door", Quantity: intent.TargetOne}, Evidence: "listen"}},
+		{name: "explore", action: &intent.ExploreAction{Target: intent.Reference{Mention: "room", Quantity: intent.TargetOne}, Evidence: "explore"}},
+	}
+	for _, tt := range actions {
+		t.Run(tt.name, func(t *testing.T) {
+			plan := intent.SemanticPlan{
+				Actions:   []intent.SemanticAction{tt.action},
+				Questions: []intent.FactQuestion{{Kind: game.FactLifeStatus, Target: "doctor", TargetMode: intent.TargetOne}},
+			}
+			originalBefore := semanticActionValue(tt.action)
+			cloned := cloneSemanticPlan(plan)
+			if reflect.ValueOf(cloned.Actions[0]).Pointer() == reflect.ValueOf(tt.action).Pointer() {
+				t.Fatal("cloned action retained the original pointer")
+			}
+
+			mutateSemanticAction(t, cloned.Actions[0], "clone")
+			if !reflect.DeepEqual(semanticActionValue(tt.action), originalBefore) {
+				t.Fatalf("mutating clone changed original: got %#v want %#v", semanticActionValue(tt.action), originalBefore)
+			}
+
+			secondClone := cloneSemanticPlan(plan)
+			secondCloneBefore := semanticActionValue(secondClone.Actions[0])
+			mutateSemanticAction(t, tt.action, "original")
+			if !reflect.DeepEqual(semanticActionValue(secondClone.Actions[0]), secondCloneBefore) {
+				t.Fatalf("mutating original changed clone: got %#v want %#v", semanticActionValue(secondClone.Actions[0]), secondCloneBefore)
+			}
+
+			cloned.Questions[0].Target = "changed"
+			if plan.Questions[0].Target != "doctor" {
+				t.Fatalf("mutating cloned questions changed original: %#v", plan.Questions)
+			}
+		})
+	}
+}
+
+func TestSessionPendingPlanViewsCannotMutateChainedResumeState(t *testing.T) {
+	state, keyID, doorID := ambiguousSessionUseWorld(t)
+	use := &intent.UseAction{
+		Item:     intent.Reference{Mention: "key", Quantity: intent.TargetOne},
+		Target:   intent.Reference{Mention: "door", Quantity: intent.TargetOne},
+		Evidence: "use the key on the door",
+	}
+	plan := intent.SemanticPlan{
+		Actions: []intent.SemanticAction{intent.WaitAction{Evidence: "wait"}, use},
+		RawText: "wait, then use the key on the door",
+	}
+	parser := &scriptedSessionParser{
+		plans: map[string]intent.SemanticPlan{plan.RawText: plan},
+		decisions: map[string]intent.ClarificationDecision{
+			"first key":   {Kind: intent.ClarificationSelect, Ordinal: 1},
+			"second door": {Kind: intent.ClarificationSelect, Ordinal: 2},
+		},
+	}
+	s := New(state, parser, semanticSessionComposer{})
+
+	first := mustSessionTurn(t, s, plan.RawText)
+	if first.Pending == nil || first.Pending.ActionIndex != 1 || first.Pending.Role != grounding.RoleItem || state.NowSeconds != 10 {
+		t.Fatalf("first turn pending=%#v time=%d", first.Pending, state.NowSeconds)
+	}
+	use.Target.Mention = "source mutation"
+	first.SemanticPlan.Actions[1].(*intent.UseAction).Target.Mention = "processed mutation"
+	first.Pending.RemainingPlan.Actions[0].(*intent.UseAction).Target.Mention = "pending mutation"
+
+	second := mustSessionTurn(t, s, "first key")
+	if second.Pending == nil || second.Pending.ActionIndex != 1 || second.Pending.Role != grounding.RoleDoor {
+		t.Fatalf("second pending = %#v, want chained door ambiguity", second.Pending)
+	}
+	if state.NowSeconds != 10 || len(second.Result.Outcomes) != 0 {
+		t.Fatalf("second turn replayed work: time=%d outcomes=%#v", state.NowSeconds, second.Result.Outcomes)
+	}
+
+	third := mustSessionTurn(t, s, "second door")
+	if third.Pending != nil || len(third.Result.Outcomes) != 1 || third.Result.Outcomes[0].Result.Status != game.ActionSucceeded {
+		t.Fatalf("third turn = %#v", third)
+	}
+	if !state.HasItem(keyID) || state.Doors[doorID].State != world.DoorClosed {
+		t.Fatalf("selected identities changed: inventory=%#v door=%#v", state.Inventory, state.Doors[doorID])
+	}
+	if state.NowSeconds != 10+third.DurationSeconds {
+		t.Fatalf("time=%d duration=%d, want wait plus one resumed action", state.NowSeconds, third.DurationSeconds)
+	}
+}
+
+func TestSessionRetainsPendingAfterClarificationErrorAndConflictingSelection(t *testing.T) {
+	state := litStorageWorld(t)
+	parseErr := errors.New("clarification unavailable")
+	parser := &scriptedSessionParser{
+		plans: map[string]intent.SemanticPlan{"search the doctor": searchDoctorPlan()},
+		decisions: map[string]intent.ClarificationDecision{
+			"conflict": {Kind: intent.ClarificationSelect, Mention: "Doctor Near Cabinet", Ordinal: 2},
+			"first":    {Kind: intent.ClarificationSelect, Ordinal: 1},
+		},
+		clarificationErrors: map[string]error{"error": parseErr},
+	}
+	s := New(state, parser, semanticSessionComposer{})
+	first := mustSessionTurn(t, s, "search the doctor")
+	wantIDs := pendingIDs(first.Pending)
+
+	if _, err := s.ProcessTurn(context.Background(), "error"); !errors.Is(err, parseErr) {
+		t.Fatalf("parse error = %v, want %v", err, parseErr)
+	}
+	if s.pending == nil || !reflect.DeepEqual(s.pending.candidateIDs, wantIDs) || state.NowSeconds != 0 {
+		t.Fatalf("pending changed after parse error: pending=%#v time=%d", s.pending, state.NowSeconds)
+	}
+
+	conflict := mustSessionTurn(t, s, "conflict")
+	if conflict.Pending == nil || conflict.Result.StopReason != "clarification" || state.NowSeconds != 0 {
+		t.Fatalf("conflict turn = %#v time=%d", conflict, state.NowSeconds)
+	}
+	if s.pending == nil || !reflect.DeepEqual(s.pending.candidateIDs, wantIDs) {
+		t.Fatalf("pending changed after conflict: %#v", s.pending)
+	}
+
+	resolved := mustSessionTurn(t, s, "first")
+	if resolved.Pending != nil || len(resolved.Result.Outcomes) != 1 || resolved.Result.Outcomes[0].TargetObjectID != scenario.ObjectBodyCabinet {
+		t.Fatalf("resolved turn = %#v", resolved)
+	}
+}
+
+func TestSessionRejectsStaleSingleAndAllBindingsWithoutFallback(t *testing.T) {
+	tests := []struct {
+		name     string
+		decision intent.ClarificationDecision
+	}{
+		{name: "single", decision: intent.ClarificationDecision{Kind: intent.ClarificationSelect, Ordinal: 1}},
+		{name: "all", decision: intent.ClarificationDecision{Kind: intent.ClarificationAll}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := litStorageWorld(t)
+			parser := &scriptedSessionParser{
+				plans:     map[string]intent.SemanticPlan{"search the doctor": searchDoctorPlan()},
+				decisions: map[string]intent.ClarificationDecision{"choose": tt.decision},
+			}
+			s := New(state, parser, semanticSessionComposer{})
+			first := mustSessionTurn(t, s, "search the doctor")
+			staleID := game.ObjectID(first.Pending.Candidates[0].ID)
+			removeRoomObject(state, staleID)
+
+			got := mustSessionTurn(t, s, "choose")
+
+			if got.Pending != nil || len(got.Result.Outcomes) != 1 {
+				t.Fatalf("turn = %#v", got)
+			}
+			outcome := got.Result.Outcomes[0]
+			if outcome.Result.Status != game.ActionFailed || outcome.Result.Outcome != string(grounding.MissingReasonStaleBinding) {
+				t.Fatalf("outcome = %#v", outcome)
+			}
+			if outcome.TargetObjectID != "" || state.NowSeconds != 0 {
+				t.Fatalf("stale binding fell back or executed: target=%q time=%d", outcome.TargetObjectID, state.NowSeconds)
+			}
+		})
+	}
+}
+
+func mutateSemanticAction(t *testing.T, action intent.SemanticAction, value string) {
+	t.Helper()
+	reference := intent.Reference{Mention: value, Quantity: intent.TargetAll}
+	switch typed := action.(type) {
+	case *intent.MoveAction:
+		typed.Direction, typed.Evidence = value, value
+	case *intent.InspectAction:
+		typed.Target, typed.Evidence = reference, value
+	case *intent.SearchAction:
+		typed.Target, typed.Evidence = reference, value
+	case *intent.TakeAction:
+		typed.Target, typed.Evidence = reference, value
+	case *intent.UseAction:
+		typed.Item, typed.Target, typed.Evidence = reference, reference, value
+	case *intent.ToggleAction:
+		typed.Item, typed.State, typed.Evidence = reference, "off", value
+	case *intent.WaitAction:
+		typed.Evidence = value
+	case *intent.TalkAction:
+		typed.Target, typed.Evidence = reference, value
+	case *intent.ListenAction:
+		typed.Target, typed.Evidence = reference, value
+	case *intent.ExploreAction:
+		typed.Target, typed.Evidence = reference, value
+	default:
+		t.Fatalf("unsupported action type %T", action)
+	}
+}
+
+func semanticActionValue(action intent.SemanticAction) any {
+	value := reflect.ValueOf(action)
+	if value.Kind() == reflect.Pointer {
+		return value.Elem().Interface()
+	}
+	return action
+}
+
+func pendingIDs(pending *turn.PendingSemanticAction) []string {
+	if pending == nil {
+		return nil
+	}
+	ids := make([]string, len(pending.Candidates))
+	for index, candidate := range pending.Candidates {
+		ids[index] = candidate.ID
+	}
+	return ids
+}
+
+func removeRoomObject(state *world.State, objectID game.ObjectID) {
+	room := state.Rooms[state.CurrentRoomID]
+	kept := room.Objects[:0]
+	for _, current := range room.Objects {
+		if current != objectID {
+			kept = append(kept, current)
+		}
+	}
+	room.Objects = kept
+	state.Rooms[room.ID] = room
+}
+
+func ambiguousSessionUseWorld(t *testing.T) (*world.State, game.ItemID, game.DoorID) {
+	t.Helper()
+	const (
+		roomID game.RoomID = "junction"
+		keyA   game.ItemID = "key_a"
+		keyB   game.ItemID = "key_b"
+		doorA  game.DoorID = "door_a"
+		doorB  game.DoorID = "door_b"
+	)
+	state := world.NewState(roomID)
+	state.Rooms[roomID] = world.Room{
+		ID: roomID, Name: "Junction", Visibility: world.VisibilityLit,
+		Exits: []world.Exit{
+			{Direction: "north", To: "north_room", Door: doorA},
+			{Direction: "south", To: "south_room", Door: doorB},
+		},
+	}
+	state.Rooms["north_room"] = world.Room{ID: "north_room", Name: "North Room", Visibility: world.VisibilityLit}
+	state.Rooms["south_room"] = world.Room{ID: "south_room", Name: "South Room", Visibility: world.VisibilityLit}
+	state.Items[keyA] = world.Item{ID: keyA, Name: "Brass Key", Aliases: []string{"key"}, Portable: true}
+	state.Items[keyB] = world.Item{ID: keyB, Name: "Small Key", Aliases: []string{"key"}, Portable: true}
+	state.AddInventory(keyA)
+	state.AddInventory(keyB)
+	state.Doors[doorA] = world.Door{ID: doorA, Name: "North Door", Aliases: []string{"door"}, From: roomID, To: "north_room", State: world.DoorLocked, RequiredKey: keyB}
+	state.Doors[doorB] = world.Door{ID: doorB, Name: "South Door", Aliases: []string{"door"}, From: roomID, To: "south_room", State: world.DoorLocked, RequiredKey: keyA}
+	if err := state.ObserveRoom(roomID, ""); err != nil {
+		t.Fatal(err)
+	}
+	return state, keyA, doorB
 }
 
 func mustSessionTurn(t *testing.T, session *Session, message string) ProcessedTurn {

@@ -288,9 +288,124 @@ func candidateViews(candidates []grounding.Candidate) []intent.CandidateView {
 }
 
 func cloneSemanticPlan(plan intent.SemanticPlan) intent.SemanticPlan {
-	plan.Actions = append([]intent.SemanticAction(nil), plan.Actions...)
-	plan.Questions = append([]intent.FactQuestion(nil), plan.Questions...)
+	actions := make([]intent.SemanticAction, len(plan.Actions))
+	for index, action := range plan.Actions {
+		actions[index] = cloneSemanticAction(action)
+	}
+	questions := make([]intent.FactQuestion, len(plan.Questions))
+	copy(questions, plan.Questions)
+	plan.Actions = actions
+	plan.Questions = questions
 	return plan
+}
+
+func cloneSemanticAction(action intent.SemanticAction) intent.SemanticAction {
+	switch typed := action.(type) {
+	case intent.MoveAction:
+		return typed
+	case *intent.MoveAction:
+		if typed == nil {
+			return (*intent.MoveAction)(nil)
+		}
+		cloned := *typed
+		return &cloned
+	case intent.InspectAction:
+		typed.Target = cloneReference(typed.Target)
+		return typed
+	case *intent.InspectAction:
+		if typed == nil {
+			return (*intent.InspectAction)(nil)
+		}
+		cloned := *typed
+		cloned.Target = cloneReference(typed.Target)
+		return &cloned
+	case intent.SearchAction:
+		typed.Target = cloneReference(typed.Target)
+		return typed
+	case *intent.SearchAction:
+		if typed == nil {
+			return (*intent.SearchAction)(nil)
+		}
+		cloned := *typed
+		cloned.Target = cloneReference(typed.Target)
+		return &cloned
+	case intent.TakeAction:
+		typed.Target = cloneReference(typed.Target)
+		return typed
+	case *intent.TakeAction:
+		if typed == nil {
+			return (*intent.TakeAction)(nil)
+		}
+		cloned := *typed
+		cloned.Target = cloneReference(typed.Target)
+		return &cloned
+	case intent.UseAction:
+		typed.Item = cloneReference(typed.Item)
+		typed.Target = cloneReference(typed.Target)
+		return typed
+	case *intent.UseAction:
+		if typed == nil {
+			return (*intent.UseAction)(nil)
+		}
+		cloned := *typed
+		cloned.Item = cloneReference(typed.Item)
+		cloned.Target = cloneReference(typed.Target)
+		return &cloned
+	case intent.ToggleAction:
+		typed.Item = cloneReference(typed.Item)
+		return typed
+	case *intent.ToggleAction:
+		if typed == nil {
+			return (*intent.ToggleAction)(nil)
+		}
+		cloned := *typed
+		cloned.Item = cloneReference(typed.Item)
+		return &cloned
+	case intent.WaitAction:
+		return typed
+	case *intent.WaitAction:
+		if typed == nil {
+			return (*intent.WaitAction)(nil)
+		}
+		cloned := *typed
+		return &cloned
+	case intent.TalkAction:
+		typed.Target = cloneReference(typed.Target)
+		return typed
+	case *intent.TalkAction:
+		if typed == nil {
+			return (*intent.TalkAction)(nil)
+		}
+		cloned := *typed
+		cloned.Target = cloneReference(typed.Target)
+		return &cloned
+	case intent.ListenAction:
+		typed.Target = cloneReference(typed.Target)
+		return typed
+	case *intent.ListenAction:
+		if typed == nil {
+			return (*intent.ListenAction)(nil)
+		}
+		cloned := *typed
+		cloned.Target = cloneReference(typed.Target)
+		return &cloned
+	case intent.ExploreAction:
+		typed.Target = cloneReference(typed.Target)
+		return typed
+	case *intent.ExploreAction:
+		if typed == nil {
+			return (*intent.ExploreAction)(nil)
+		}
+		cloned := *typed
+		cloned.Target = cloneReference(typed.Target)
+		return &cloned
+	default:
+		return action
+	}
+}
+
+func cloneReference(reference intent.Reference) intent.Reference {
+	return intent.Reference{Mention: reference.Mention, Quantity: reference.Quantity}
 }
 
 func cloneGroundingCandidates(candidates []grounding.Candidate) []grounding.Candidate {
