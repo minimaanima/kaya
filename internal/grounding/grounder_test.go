@@ -144,7 +144,7 @@ func TestGroundNonDemonstrativeExactMatchStillOutranksRecentReferent(t *testing.
 	}
 }
 
-func TestGroundLiteralDemonstrativeNameOutranksExplicitBinding(t *testing.T) {
+func TestGroundExplicitBindingOverridesLiteralDemonstrativeName(t *testing.T) {
 	state := syntheticWorld()
 	literal := state.Objects[objectRelay]
 	literal.Name = "That"
@@ -155,7 +155,7 @@ func TestGroundLiteralDemonstrativeNameOutranksExplicitBinding(t *testing.T) {
 		&Binding{Role: RoleObject, CandidateIDs: []string{string(objectRelayShell)}},
 	)
 
-	assertReadyIDs(t, got, RoleObject, string(objectRelay))
+	assertReadyIDs(t, got, RoleObject, string(objectRelayShell))
 }
 
 func TestGroundLiteralDemonstrativeAliasOutranksRecentReferent(t *testing.T) {
@@ -226,6 +226,20 @@ func TestGroundUsesCandidateBoundIDs(t *testing.T) {
 	missing := New(state).Ground(action, &Binding{Role: RoleObject, CandidateIDs: []string{"not_permitted"}})
 	if missing.Missing == nil || missing.Missing.Role != RoleObject {
 		t.Fatalf("Ground() missing = %#v, want bound object failure", missing.Missing)
+	}
+}
+
+func TestGroundStaleBindingDoesNotFallBackToLiteralExactName(t *testing.T) {
+	state := syntheticWorld()
+	boundIDs := []string{"stale_selection"}
+	got := New(state).Ground(
+		intent.SearchAction{Target: reference("Copper Relay", intent.TargetOne)},
+		&Binding{Role: RoleObject, CandidateIDs: boundIDs},
+	)
+
+	assertStaleBinding(t, got, RoleObject, intent.TargetOne, boundIDs, "stale_selection")
+	if len(got.References) != 0 {
+		t.Fatalf("Ground() references = %#v, want no literal fallback", got.References)
 	}
 }
 

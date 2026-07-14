@@ -133,14 +133,6 @@ func resolveReference(reference intent.Reference, role Role, candidates []Candid
 	if quantity == "" || quantity == intent.TargetSingle {
 		quantity = intent.TargetOne
 	}
-	exact := exactMatches(mention, candidates)
-	if len(exact) > 0 {
-		if quantity != intent.TargetAll && len(exact) > 1 {
-			return GroundedReference{}, &Clarification{Role: role, Mention: mention, Candidates: exact}, nil
-		}
-		return GroundedReference{Role: role, Mention: mention, Quantity: quantity, Candidates: exact}, nil, nil
-	}
-
 	if binding != nil && binding.Role == role {
 		bound, stale := revalidateCandidateIDs(candidates, binding.CandidateIDs)
 		if len(binding.CandidateIDs) == 0 || len(stale) > 0 {
@@ -154,6 +146,13 @@ func resolveReference(reference intent.Reference, role Role, candidates []Candid
 			}
 		}
 		return GroundedReference{Role: role, Mention: mention, Quantity: quantity, Candidates: bound}, nil, nil
+	}
+	exact := exactMatches(mention, candidates)
+	if len(exact) > 0 {
+		if quantity != intent.TargetAll && len(exact) > 1 {
+			return GroundedReference{}, &Clarification{Role: role, Mention: mention, Candidates: exact}, nil
+		}
+		return GroundedReference{Role: role, Mention: mention, Quantity: quantity, Candidates: exact}, nil, nil
 	}
 
 	pronoun := referencePronoun(mention)
