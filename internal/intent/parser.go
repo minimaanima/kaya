@@ -41,12 +41,19 @@ type ParseProvenance struct {
 }
 
 type SemanticProvenance struct {
+	// RawPlan and ValidationErrors describe the terminal model attempt.
 	Source           ParseSource
 	RawPlan          ModelTurnPlan
 	HasRawPlan       bool
 	ValidationErrors []ValidationError
-	RepairReason     error
-	FallbackError    error
+
+	// InitialRawPlan and InitialValidationErrors preserve the attempt that triggered repair.
+	InitialRawPlan          ModelTurnPlan
+	HasInitialRawPlan       bool
+	InitialValidationErrors []ValidationError
+
+	RepairReason  error
+	FallbackError error
 }
 
 type semanticParseAttempt struct {
@@ -132,19 +139,21 @@ func (p Parser) ParseSemanticWithProvenance(ctx context.Context, message string,
 			initial,
 			fmt.Errorf("validate repaired semantic plan: %w", repaired.err),
 		)
-		if repaired.hasRawPlan {
-			provenance.RawPlan = repaired.rawPlan
-			provenance.HasRawPlan = true
-		}
+		provenance.RawPlan = repaired.rawPlan
+		provenance.HasRawPlan = repaired.hasRawPlan
+		provenance.ValidationErrors = append([]ValidationError(nil), repaired.validationErrors...)
 		return semanticParserFallback(message, provenance)
 	}
 
 	return repaired.plan, SemanticProvenance{
-		Source:           ParseSourceRepair,
-		RawPlan:          repaired.rawPlan,
-		HasRawPlan:       true,
-		ValidationErrors: append([]ValidationError(nil), initial.validationErrors...),
-		RepairReason:     initial.err,
+		Source:                  ParseSourceRepair,
+		RawPlan:                 repaired.rawPlan,
+		HasRawPlan:              true,
+		ValidationErrors:        append([]ValidationError(nil), repaired.validationErrors...),
+		InitialRawPlan:          initial.rawPlan,
+		HasInitialRawPlan:       initial.hasRawPlan,
+		InitialValidationErrors: append([]ValidationError(nil), initial.validationErrors...),
+		RepairReason:            initial.err,
 	}, nil
 }
 
@@ -183,12 +192,15 @@ func parseSemanticAttempt(message, raw string) semanticParseAttempt {
 
 func failedSemanticProvenance(initial semanticParseAttempt, fallbackErr error) SemanticProvenance {
 	return SemanticProvenance{
-		Source:           ParseSourceFallback,
-		RawPlan:          initial.rawPlan,
-		HasRawPlan:       initial.hasRawPlan,
-		ValidationErrors: append([]ValidationError(nil), initial.validationErrors...),
-		RepairReason:     initial.err,
-		FallbackError:    fallbackErr,
+		Source:                  ParseSourceFallback,
+		RawPlan:                 initial.rawPlan,
+		HasRawPlan:              initial.hasRawPlan,
+		ValidationErrors:        append([]ValidationError(nil), initial.validationErrors...),
+		InitialRawPlan:          initial.rawPlan,
+		HasInitialRawPlan:       initial.hasRawPlan,
+		InitialValidationErrors: append([]ValidationError(nil), initial.validationErrors...),
+		RepairReason:            initial.err,
+		FallbackError:           fallbackErr,
 	}
 }
 

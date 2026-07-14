@@ -112,7 +112,13 @@ func TestParseSemanticRepairsContractFailureOnce(t *testing.T) {
 	if provenance.RepairReason == nil || provenance.FallbackError != nil {
 		t.Fatalf("provenance = %#v, want repair reason without fallback error", provenance)
 	}
-	requireSemanticProblem(t, provenance.ValidationErrors, "itemMention", "forbidden_slot")
+	if len(provenance.ValidationErrors) != 0 {
+		t.Fatalf("terminal validation errors = %#v, want successful repair", provenance.ValidationErrors)
+	}
+	if !provenance.HasInitialRawPlan || len(provenance.InitialRawPlan.Actions) != 1 {
+		t.Fatalf("initial provenance = %#v, want rejected initial DTO", provenance)
+	}
+	requireSemanticProblem(t, provenance.InitialValidationErrors, "itemMention", "forbidden_slot")
 	if _, ok := onlySemanticAction(t, plan).(SearchAction); !ok {
 		t.Fatalf("action = %T, want SearchAction", onlySemanticAction(t, plan))
 	}
@@ -174,16 +180,22 @@ func TestParseSemanticRepairPayloadIncludesMessageAndValidationErrors(t *testing
 
 func TestParseSemanticInvalidRepairBecomesClarification(t *testing.T) {
 	message := "search the desk"
-	invalid := semanticModelPlanJSON(t, message, ModelAction{
+	initialInvalid := semanticModelPlanJSON(t, message, ModelAction{
 		Kind:          "search",
 		TargetMention: "the desk",
 		ItemMention:   "flashlight",
 		Evidence:      message,
 		Quantity:      TargetOne,
 	})
+	repairInvalid := semanticModelPlanJSON(t, message, ModelAction{
+		Kind:          "move",
+		TargetMention: "the hall",
+		Evidence:      message,
+		Quantity:      TargetOne,
+	})
 	generator := &semanticRecordingGenerator{results: []semanticGeneratorResult{
-		{response: invalid},
-		{response: invalid},
+		{response: initialInvalid},
+		{response: repairInvalid},
 		{response: semanticModelPlanJSON(t, message, ModelAction{Kind: "wait", Evidence: message, Quantity: TargetOne})},
 	}}
 
@@ -201,6 +213,109 @@ func TestParseSemanticInvalidRepairBecomesClarification(t *testing.T) {
 	}
 	if provenance.Source != ParseSourceFallback || provenance.RepairReason == nil || provenance.FallbackError == nil {
 		t.Fatalf("provenance = %#v, want failed-repair fallback provenance", provenance)
+	}
+	if !provenance.HasRawPlan || len(provenance.RawPlan.Actions) != 1 || provenance.RawPlan.Actions[0].Kind != "move" {
+		t.Fatalf("terminal raw plan = %#v, want invalid repair DTO", provenance.RawPlan)
+	}
+	requireSemanticProblem(t, provenance.ValidationErrors, "direction", "required_slot")
+	if !provenance.HasInitialRawPlan || len(provenance.InitialRawPlan.Actions) != 1 || provenance.InitialRawPlan.Actions[0].Kind != "search" {
+		t.Fatalf("initial raw plan = %#v, want invalid first DTO", provenance.InitialRawPlan)
+	}
+	requireSemanticProblem(t, provenance.InitialValidationErrors, "itemMention", "forbidden_slot")
+}
+
+func TestParseSemanticRepairsMalformedFirstResponse(t *testing.T) {
+	message := "wait"
+	valid := semanticModelPlanJSON(t, message, ModelAction{
+		Kind:     "wait",
+		Evidence: message,
+		Quantity: TargetOne,
+	})
+	generator := &semanticRecordingGenerator{results: []semanticGeneratorResult{
+		{response: `{"actions":`},
+		{response: valid},
+	}}
+
+	plan, provenance, err := NewParser(generator).ParseSemanticWithProvenance(
+		context.Background(), message, game.PerceptionSnapshot{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(generator.calls) != 2 {
+		t.Fatalf("generator calls = %d, want 2", len(generator.calls))
+	}
+	for index, call := range generator.calls {
+		if !reflect.DeepEqual(call.schema, ModelTurnPlanSchema) {
+			t.Fatalf("call %d schema = %#v, want ModelTurnPlanSchema", index, call.schema)
+		}
+	}
+	if provenance.Source != ParseSourceRepair || !provenance.HasRawPlan || len(provenance.ValidationErrors) != 0 {
+		t.Fatalf("provenance = %#v, want successful terminal repair attempt", provenance)
+	}
+	if provenance.HasInitialRawPlan {
+		t.Fatalf("provenance = %#v, malformed initial response cannot have a raw DTO", provenance)
+	}
+	requireSemanticProblem(t, provenance.InitialValidationErrors, "plan", "decode_error")
+	if _, ok := onlySemanticAction(t, plan).(WaitAction); !ok {
+		t.Fatalf("action = %T, want WaitAction", onlySemanticAction(t, plan))
+	}
+
+	var payload struct {
+		HasRejectedPlan  bool              `json:"hasRejectedPlan"`
+		ValidationErrors []ValidationError `json:"validationErrors"`
+	}
+	if err := json.Unmarshal([]byte(generator.calls[1].userPrompt), &payload); err != nil {
+		t.Fatalf("decode repair payload: %v", err)
+	}
+	if payload.HasRejectedPlan {
+		t.Fatalf("repair payload = %#v, malformed response cannot have a rejected DTO", payload)
+	}
+	requireSemanticProblem(t, payload.ValidationErrors, "plan", "decode_error")
+}
+
+func TestParseSemanticMalformedRepairClarifiesWithoutThirdCall(t *testing.T) {
+	message := "search the desk"
+	initialInvalid := semanticModelPlanJSON(t, message, ModelAction{
+		Kind:          "search",
+		TargetMention: "the desk",
+		ItemMention:   "flashlight",
+		Evidence:      message,
+		Quantity:      TargetOne,
+	})
+	generator := &semanticRecordingGenerator{results: []semanticGeneratorResult{
+		{response: initialInvalid},
+		{response: `{"actions":`},
+		{response: semanticModelPlanJSON(t, message, ModelAction{Kind: "wait", Evidence: message, Quantity: TargetOne})},
+	}}
+
+	plan, provenance, err := NewParser(generator).ParseSemanticWithProvenance(
+		context.Background(), message, game.PerceptionSnapshot{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(generator.calls) != 2 {
+		t.Fatalf("generator calls = %d, want hard maximum of 2", len(generator.calls))
+	}
+	for index, call := range generator.calls {
+		if !reflect.DeepEqual(call.schema, ModelTurnPlanSchema) {
+			t.Fatalf("call %d schema = %#v, want ModelTurnPlanSchema", index, call.schema)
+		}
+	}
+	if len(plan.Actions) != 0 || !plan.NeedsClarification || plan.ClarificationQuestion == "" {
+		t.Fatalf("plan = %#v, want safe clarification", plan)
+	}
+	if provenance.Source != ParseSourceFallback || provenance.HasRawPlan {
+		t.Fatalf("provenance = %#v, malformed terminal repair cannot have a raw DTO", provenance)
+	}
+	requireSemanticProblem(t, provenance.ValidationErrors, "plan", "decode_error")
+	if !provenance.HasInitialRawPlan || len(provenance.InitialRawPlan.Actions) != 1 {
+		t.Fatalf("initial provenance = %#v, want rejected initial DTO", provenance)
+	}
+	requireSemanticProblem(t, provenance.InitialValidationErrors, "itemMention", "forbidden_slot")
+	if provenance.RepairReason == nil || provenance.FallbackError == nil {
+		t.Fatalf("provenance = %#v, want both lifecycle errors", provenance)
 	}
 }
 
