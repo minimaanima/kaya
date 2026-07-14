@@ -319,7 +319,7 @@ func mergeCanonicalAction(canonical, model PlannedAction) PlannedAction {
 	if modifiers := model.Intent.Modifiers; len(modifiers) > 0 {
 		canonical.Intent.Modifiers = append([]string(nil), modifiers...)
 	}
-	if isRefinedCanonicalField(model.Intent.Target, canonical.Intent.Target) {
+	if !(canonical.TargetMode == TargetAll && hasLeadingTargetQuantifier(model.Intent.Target)) && isRefinedCanonicalField(model.Intent.Target, canonical.Intent.Target) {
 		canonical.Intent.Target = model.Intent.Target
 	}
 	if preservesCompatibleTarget(canonical.Intent.Action, canonical.Intent.Target, model.Intent.Target) {
@@ -335,6 +335,11 @@ func mergeCanonicalAction(canonical, model PlannedAction) PlannedAction {
 		canonical.TargetMode = model.TargetMode
 	}
 	return canonical
+}
+
+func hasLeadingTargetQuantifier(target string) bool {
+	words := strings.Fields(normalizePlayerText(target))
+	return len(words) > 0 && (words[0] == "both" || words[0] == "all")
 }
 
 func preservesCompatibleTarget(action Action, canonical, model string) bool {

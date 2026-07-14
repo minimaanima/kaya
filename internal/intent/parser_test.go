@@ -447,6 +447,72 @@ func TestParserLocalCommandsOverrideWrongModelCompoundPlan(t *testing.T) {
 	}
 }
 
+func TestParserCanonicalizesTranscriptRoomPluralAndUnlockPhrases(t *testing.T) {
+	tests := []struct {
+		name    string
+		message string
+		model   []PlannedAction
+		want    []PlannedAction
+	}{
+		{
+			name:    "room search in compound",
+			message: "turn on the flashlight and search the room",
+			model: []PlannedAction{
+				modelAction(ActionTurnOn, "", "flashlight", ""),
+				modelAction(ActionSearch, "room", "", ""),
+			},
+			want: []PlannedAction{
+				modelAction(ActionTurnOn, "", "flashlight", ""),
+				modelAction(ActionInspect, "", "", ""),
+			},
+		},
+		{
+			name:    "explicit both doctors",
+			message: "search the both doctors",
+			model:   []PlannedAction{modelAction(ActionSearch, "both doctors", "", "")},
+			want:    []PlannedAction{allTargets(modelAction(ActionSearch, "doctors", "", ""))},
+		},
+		{
+			name:    "unlock demonstrative door",
+			message: "use the key to unlock that door",
+			model: []PlannedAction{
+				modelAction(ActionUseItem, "body_door", "Brass Key", ""),
+				modelAction(ActionExplore, "body_door", "", ""),
+				modelAction(ActionExplore, "body_door", "", ""),
+				modelAction(ActionExplore, "body_door", "", ""),
+			},
+			want: []PlannedAction{modelAction(ActionUseItem, "door", "key", "")},
+		},
+		{
+			name:    "unlock named door with echoed state",
+			message: "unlock the The Emergency Stairwell Door is locked",
+			model: []PlannedAction{
+				modelAction(ActionUseItem, "The Emergency Stairwell Door", "Brass Key", ""),
+				modelAction(ActionExplore, "", "", ""),
+			},
+			want: []PlannedAction{modelAction(ActionUseItem, "emergency stairwell door", "key", "")},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := NewParser(&fakeGenerator{responses: []string{modelPlanJSON(t, tt.message, tt.model...)}}).Parse(context.Background(), tt.message, game.PerceptionSnapshot{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.NeedsClarification || len(got.Actions) != len(tt.want) {
+				t.Fatalf("plan = %#v, want %d executable actions", got, len(tt.want))
+			}
+			for i := range tt.want {
+				actual, want := got.Actions[i], tt.want[i]
+				if actual.Intent.Action != want.Intent.Action || actual.Intent.Target != want.Intent.Target || actual.Intent.Item != want.Intent.Item || actual.Intent.Direction != want.Intent.Direction || actual.TargetMode != want.TargetMode {
+					t.Fatalf("action %d = %#v, want %#v", i, actual, want)
+				}
+			}
+		})
+	}
+}
+
 func TestParserNormalizesPluralDoctorTargetAsAll(t *testing.T) {
 	raw := `{"actions":[{"intent":{"action":"inspect","target":"doctors","item":"","direction":"","modifiers":[],"confidence":0.9,"rawText":"inspect the doctors","needsClarification":false,"clarificationQuestion":""},"targetMode":"single"}],"questions":[],"confidence":0.9,"needsClarification":false,"clarificationQuestion":"","rawText":"inspect the doctors"}`
 	plan, err := NewParser(&fakeGenerator{responses: []string{raw}}).Parse(context.Background(), "inspect the doctors", game.PerceptionSnapshot{})

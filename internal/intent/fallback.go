@@ -92,9 +92,17 @@ func fallbackSinglePlan(message string) TurnPlan {
 	case strings.Contains(low, "throw"):
 		intent.Item, intent.Target = extractThrowParts(message)
 		intent.Action, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionThrow, 0.8, false, ""
+	case isUnlockMessage(low):
+		intent.Item, intent.Target = extractUnlockParts(message)
+		intent.Action, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionUseItem, 0.9, false, ""
 	case isUseItemMessage(low):
 		intent.Item, intent.Target = extractUseItemParts(message)
 		intent.Action, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionUseItem, 0.8, false, ""
+	case isRoomSearchMessage(low):
+		intent.Action, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionInspect, 0.7, false, ""
+	case isExplicitAllSearchMessage(low):
+		intent.Action, intent.Target, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionSearch, explicitAllSearchTarget(message), 0.8, false, ""
+		targetMode = TargetAll
 	case isSearchMessage(low):
 		intent.Action, intent.Target, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionSearch, extractSearchTarget(message), 0.7, false, ""
 	case strings.Contains(low, "pick up") || strings.Contains(low, "take ") || strings.HasPrefix(low, "take") || strings.Contains(low, "grab "):
@@ -272,6 +280,32 @@ func isSearchMessage(message string) bool {
 		strings.Contains(message, "look in")
 }
 
+func isRoomSearchMessage(message string) bool {
+	if !isSearchMessage(message) {
+		return false
+	}
+	target := extractSearchTarget(message)
+	return target != "" && isRoomLikeContainerTarget(target)
+}
+
+func isExplicitAllSearchMessage(message string) bool {
+	if !isSearchMessage(message) {
+		return false
+	}
+	words := strings.Fields(extractSearchTarget(message))
+	return len(words) > 1 && (words[0] == "both" || words[0] == "all")
+}
+
+func explicitAllSearchTarget(message string) string {
+	words := strings.Fields(extractSearchTarget(message))
+	if len(words) < 2 {
+		return ""
+	}
+	target := strings.Join(words[1:], " ")
+	target = strings.TrimPrefix(target, "of ")
+	return cleanTargetPrefix(target)
+}
+
 func extractSearchTarget(message string) string {
 	return extractTarget(message, []string{"look through", "look inside", "look in", "search", "rummage", "check"})
 }
@@ -338,6 +372,34 @@ func extractUseItemParts(message string) (item string, target string) {
 		return "", ""
 	}
 	return cleanTargetPrefix(rest[:split]), cleanTargetPrefix(rest[split+len(" on "):])
+}
+
+func isUnlockMessage(message string) bool {
+	return findCue(message, "unlock") >= 0
+}
+
+func extractUnlockParts(message string) (item string, target string) {
+	low := normalizePlayerText(message)
+	index := findCue(low, "unlock")
+	if index < 0 {
+		return "", ""
+	}
+	target = strings.TrimSpace(low[index+len("unlock"):])
+	for _, separator := range []string{" with ", " using "} {
+		if split := strings.Index(target, separator); split >= 0 {
+			target = target[:split]
+			break
+		}
+	}
+	for _, suffix := range []string{" is locked", " was locked"} {
+		target = strings.TrimSuffix(target, suffix)
+	}
+	target = cleanTargetPrefix(target)
+	switch target {
+	case "", "it", "that", "this", "that door", "this door":
+		target = "door"
+	}
+	return "key", target
 }
 
 func isUseItemMessage(message string) bool {
