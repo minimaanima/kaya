@@ -68,6 +68,60 @@ func NewParser(generator StructuredGenerator) Parser {
 	return Parser{generator: generator}
 }
 
+func (p Parser) ParseClarification(ctx context.Context, text string, candidates []CandidateView) (ClarificationDecision, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ClarificationDecision{}, ErrEmptyMessage
+	}
+	if p.generator == nil {
+		return ClarificationDecision{}, errors.New("clarification parser has no generator")
+	}
+	if err := validateCandidateViews(candidates); err != nil {
+		return ClarificationDecision{}, err
+	}
+	payload, err := json.Marshal(struct {
+		Player     string          `json:"player"`
+		Candidates []CandidateView `json:"candidates"`
+	}{Player: text, Candidates: cloneCandidateViews(candidates)})
+	if err != nil {
+		return ClarificationDecision{}, fmt.Errorf("encode clarification input: %w", err)
+	}
+	raw, err := p.generator.GenerateJSON(ctx, ClarificationPrompt, string(payload), ClarificationDecisionSchema)
+	if err != nil {
+		return ClarificationDecision{}, fmt.Errorf("generate clarification decision: %w", err)
+	}
+	return parseClarificationDecision(raw, candidates)
+}
+
+func validateCandidateViews(candidates []CandidateView) error {
+	if len(candidates) == 0 {
+		return errors.New("clarification candidates must not be empty")
+	}
+	seen := make(map[int]bool, len(candidates))
+	for index, candidate := range candidates {
+		if candidate.Ordinal < 1 || seen[candidate.Ordinal] {
+			return fmt.Errorf("clarification candidate %d has invalid ordinal %d", index, candidate.Ordinal)
+		}
+		if strings.TrimSpace(candidate.Name) == "" {
+			return fmt.Errorf("clarification candidate %d has empty name", index)
+		}
+		seen[candidate.Ordinal] = true
+	}
+	return nil
+}
+
+func cloneCandidateViews(candidates []CandidateView) []CandidateView {
+	cloned := make([]CandidateView, len(candidates))
+	for index, candidate := range candidates {
+		cloned[index] = CandidateView{
+			Ordinal: candidate.Ordinal,
+			Name:    candidate.Name,
+			Aliases: append([]string(nil), candidate.Aliases...),
+		}
+	}
+	return cloned
+}
+
 func (p Parser) ParseSemanticWithProvenance(ctx context.Context, message string, snapshot game.PerceptionSnapshot) (SemanticPlan, SemanticProvenance, error) {
 	message = strings.TrimSpace(message)
 	if message == "" {

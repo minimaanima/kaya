@@ -21,11 +21,15 @@ type Composer interface {
 }
 
 type ProcessedTurn struct {
-	Plan            intent.TurnPlan
-	Provenance      intent.ParseProvenance
-	Result          turn.Result
-	Response        response.Response
-	DurationSeconds int
+	Plan                  intent.TurnPlan
+	Provenance            intent.ParseProvenance
+	SemanticPlan          intent.SemanticPlan
+	SemanticProvenance    intent.SemanticProvenance
+	ClarificationDecision *intent.ClarificationDecision
+	Pending               *turn.PendingSemanticAction
+	Result                turn.Result
+	Response              response.Response
+	DurationSeconds       int
 }
 
 func ProcessTurn(ctx context.Context, message string, state *world.State, parser Parser, composer Composer) (ProcessedTurn, error) {

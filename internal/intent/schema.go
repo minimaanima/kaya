@@ -64,3 +64,14 @@ var ModelTurnPlanSchema = map[string]any{
 		"clarificationQuestion": map[string]any{"type": "string"},
 	},
 }
+
+var ClarificationDecisionSchema = map[string]any{
+	"type":                 "object",
+	"additionalProperties": false,
+	"required":             []string{"decision", "mention", "ordinal"},
+	"properties": map[string]any{
+		"decision": map[string]any{"type": "string", "enum": []any{"select", "all", "confirm", "cancel", "new_command"}},
+		"mention":  map[string]any{"type": "string"},
+		"ordinal":  map[string]any{"type": "integer", "minimum": 0},
+	},
+}
