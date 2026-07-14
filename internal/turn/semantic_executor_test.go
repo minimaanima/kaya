@@ -7,6 +7,7 @@ import (
 	"kaya/internal/grounding"
 	"kaya/internal/intent"
 	"kaya/internal/scenario"
+	"kaya/internal/world"
 )
 
 func TestExecuteSemanticGroundsEachActionAfterPreviousMutation(t *testing.T) {
@@ -105,6 +106,43 @@ func TestExecuteSemanticResumesExactPendingActionWithoutReplay(t *testing.T) {
 	}
 }
 
+func TestExecuteSemanticPreservesResolvedUseRoleAcrossSecondClarification(t *testing.T) {
+	state, keyID, doorID := ambiguousUseState(t)
+	executor := NewExecutor(state)
+	plan := intent.SemanticPlan{Actions: []intent.SemanticAction{
+		intent.UseAction{
+			Item:     reference("key"),
+			Target:   reference("door"),
+			Evidence: "use the key on the door",
+		},
+	}}
+
+	first := executor.ExecuteSemantic(plan, 0, nil)
+	if first.Pending == nil || first.Pending.Role != grounding.RoleItem {
+		t.Fatalf("first pending = %#v, want item clarification", first.Pending)
+	}
+	second := executor.ExecuteSemantic(first.Pending.RemainingPlan, 0, &grounding.Binding{
+		Role: grounding.RoleItem, CandidateIDs: []string{string(keyID)},
+	})
+	if second.Pending == nil || second.Pending.Role != grounding.RoleDoor {
+		t.Fatalf("second pending = %#v, want door clarification", second.Pending)
+	}
+
+	third := executor.ExecuteSemantic(second.Pending.RemainingPlan, 0, &grounding.Binding{
+		Role: grounding.RoleDoor, CandidateIDs: []string{string(doorID)},
+	})
+
+	if third.Pending != nil || len(third.Result.Outcomes) != 1 {
+		t.Fatalf("third execution = %#v, want one completed use", third)
+	}
+	if got := state.Doors[doorID].State; got != world.DoorClosed {
+		t.Fatalf("selected door state = %q, want %q", got, world.DoorClosed)
+	}
+	if state.NowSeconds != 8 {
+		t.Fatalf("elapsed = %d, want one unlock duration", state.NowSeconds)
+	}
+}
+
 func TestExecuteSemanticPassesGroundedIDToCanonicalResolverBoundary(t *testing.T) {
 	state := scenario.NewPrototypeWorld()
 	desk := state.Objects[scenario.ObjectReceptionDesk]
@@ -122,6 +160,103 @@ func TestExecuteSemanticPassesGroundedIDToCanonicalResolverBoundary(t *testing.T
 	}
 	if outcome := got.Result.Outcomes[0]; outcome.TargetObjectID != scenario.ObjectReceptionDesk || outcome.Result.Status != game.ActionSucceeded {
 		t.Fatalf("outcome = %#v, want canonical desk selection", outcome)
+	}
+}
+
+func TestExecuteSemanticPreservesSameNameObjectIdentityAtResolverBoundary(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	for _, id := range []game.ObjectID{scenario.ObjectReceptionDesk, scenario.ObjectCollapsedChair} {
+		object := state.Objects[id]
+		object.Name = "Console"
+		object.Aliases = []string{"console"}
+		state.Objects[id] = object
+	}
+	executor := NewExecutor(state)
+	plan := intent.SemanticPlan{Actions: []intent.SemanticAction{
+		intent.SearchAction{Target: reference("console"), Evidence: "search the console"},
+	}}
+	first := executor.ExecuteSemantic(plan, 0, nil)
+	if first.Pending == nil || len(first.Pending.Candidates) != 2 {
+		t.Fatalf("first execution = %#v, want same-name clarification", first)
+	}
+
+	got := executor.ExecuteSemantic(plan, first.Pending.ActionIndex, &grounding.Binding{
+		Role: grounding.RoleObject, CandidateIDs: []string{string(scenario.ObjectCollapsedChair)},
+	})
+
+	if got.Pending != nil || len(got.Result.Outcomes) != 1 {
+		t.Fatalf("execution = %#v, want one exact search", got)
+	}
+	outcome := got.Result.Outcomes[0]
+	if outcome.Result.Status != game.ActionSucceeded || len(outcome.Result.TargetObjectIDs) != 1 || outcome.Result.TargetObjectIDs[0] != scenario.ObjectCollapsedChair {
+		t.Fatalf("outcome = %#v, want selected same-name object", outcome)
+	}
+}
+
+func TestExecuteSemanticPreservesSameNameItemIdentityAtResolverBoundary(t *testing.T) {
+	const (
+		itemA game.ItemID = "token_a"
+		itemB game.ItemID = "token_b"
+	)
+	state := scenario.NewPrototypeWorld()
+	state.Items[itemA] = world.Item{ID: itemA, Name: "Token", Aliases: []string{"token"}, Portable: true}
+	state.Items[itemB] = world.Item{ID: itemB, Name: "Token", Aliases: []string{"token"}, Portable: true}
+	desk := state.Objects[scenario.ObjectReceptionDesk]
+	desk.ContainedItems = []game.ItemID{itemA}
+	state.Objects[desk.ID] = desk
+	chair := state.Objects[scenario.ObjectCollapsedChair]
+	chair.ContainedItems = []game.ItemID{itemB}
+	state.Objects[chair.ID] = chair
+	state.DiscoverItems([]game.ItemID{itemA, itemB})
+	plan := intent.SemanticPlan{Actions: []intent.SemanticAction{
+		intent.TakeAction{Target: reference("token"), Evidence: "take the token"},
+	}}
+	executor := NewExecutor(state)
+	first := executor.ExecuteSemantic(plan, 0, nil)
+	if first.Pending == nil || len(first.Pending.Candidates) != 2 {
+		t.Fatalf("first execution = %#v, want same-name clarification", first)
+	}
+
+	got := executor.ExecuteSemantic(plan, first.Pending.ActionIndex, &grounding.Binding{
+		Role: grounding.RoleItem, CandidateIDs: []string{string(itemB)},
+	})
+
+	if got.Pending != nil || len(got.Result.Outcomes) != 1 || got.Result.Outcomes[0].Result.Status != game.ActionSucceeded {
+		t.Fatalf("execution = %#v, want one exact take", got)
+	}
+	if !state.HasItem(itemB) || state.HasItem(itemA) {
+		t.Fatalf("inventory = %#v, want only selected item %q", state.Inventory, itemB)
+	}
+}
+
+func TestExecuteSemanticPreservesSameNameUseIdentityAtResolverBoundary(t *testing.T) {
+	state, keyID, doorID := ambiguousUseState(t)
+	for id, item := range state.Items {
+		item.Name = "Brass Key"
+		state.Items[id] = item
+	}
+	for id, door := range state.Doors {
+		door.Name = "Door"
+		state.Doors[id] = door
+	}
+	executor := NewExecutor(state)
+	plan := intent.SemanticPlan{Actions: []intent.SemanticAction{
+		intent.UseAction{Item: reference("key"), Target: reference("door"), Evidence: "use the key on the door"},
+	}}
+	first := executor.ExecuteSemantic(plan, 0, nil)
+	second := executor.ExecuteSemantic(first.Pending.RemainingPlan, 0, &grounding.Binding{
+		Role: grounding.RoleItem, CandidateIDs: []string{string(keyID)},
+	})
+
+	got := executor.ExecuteSemantic(second.Pending.RemainingPlan, 0, &grounding.Binding{
+		Role: grounding.RoleDoor, CandidateIDs: []string{string(doorID)},
+	})
+
+	if got.Pending != nil || len(got.Result.Outcomes) != 1 || got.Result.Outcomes[0].Result.Status != game.ActionSucceeded {
+		t.Fatalf("execution = %#v, want one exact use", got)
+	}
+	if state.Doors[doorID].State != world.DoorClosed {
+		t.Fatalf("selected door state = %q, want %q", state.Doors[doorID].State, world.DoorClosed)
 	}
 }
 
@@ -161,6 +296,41 @@ func TestExecuteSemanticPreservesPluralReferentForQuestions(t *testing.T) {
 	}
 	if len(got.Result.Outcomes) != 2 || len(got.Result.QuestionFacts) != 2 {
 		t.Fatalf("outcomes = %#v facts = %#v, want both doctors", got.Result.Outcomes, got.Result.QuestionFacts)
+	}
+}
+
+func TestExecuteSemanticPreservesPluralItemReferentGroup(t *testing.T) {
+	const (
+		itemA     game.ItemID = "token_a"
+		itemB     game.ItemID = "token_b"
+		unrelated game.ItemID = "badge"
+	)
+	state := scenario.NewPrototypeWorld()
+	state.Items[itemA] = world.Item{ID: itemA, Name: "Red Token", Aliases: []string{"token"}, Portable: true}
+	state.Items[itemB] = world.Item{ID: itemB, Name: "Blue Token", Aliases: []string{"token"}, Portable: true}
+	state.Items[unrelated] = world.Item{ID: unrelated, Name: "Badge", Portable: true}
+	desk := state.Objects[scenario.ObjectReceptionDesk]
+	desk.ContainedItems = []game.ItemID{itemA, itemB, unrelated}
+	state.Objects[desk.ID] = desk
+	state.DiscoverItems([]game.ItemID{itemA, itemB, unrelated})
+	plan := intent.SemanticPlan{Actions: []intent.SemanticAction{
+		intent.TakeAction{
+			Target:   intent.Reference{Mention: "token", Quantity: intent.TargetAll},
+			Evidence: "take the tokens",
+		},
+	}}
+
+	got := NewExecutor(state).ExecuteSemantic(plan, 0, nil)
+
+	if got.Pending != nil || len(got.Result.Outcomes) != 2 {
+		t.Fatalf("execution = %#v, want two completed takes", got)
+	}
+	if len(state.RecentReferents) == 0 {
+		t.Fatal("missing recent referent group")
+	}
+	group := state.RecentReferents[len(state.RecentReferents)-1].ItemIDs
+	if len(group) != 2 || group[0] != itemA || group[1] != itemB {
+		t.Fatalf("recent item group = %#v, want [%q %q] without %q", group, itemA, itemB, unrelated)
 	}
 }
 
@@ -204,6 +374,67 @@ func TestExecuteSemanticStopsAfterResolverFailure(t *testing.T) {
 	}
 }
 
+func TestExecuteSemanticEvaluatesFactQuestionsAfterResolverNonSuccess(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func(*world.State)
+		action     intent.SemanticAction
+		wantStatus game.ActionStatus
+		wantTime   int
+	}{
+		{
+			name: "failure",
+			setup: func(state *world.State) {
+				chair := state.Objects[scenario.ObjectCollapsedChair]
+				chair.Searchable = false
+				state.Objects[chair.ID] = chair
+			},
+			action:     intent.SearchAction{Target: reference("chair"), Evidence: "search the chair"},
+			wantStatus: game.ActionFailed,
+			wantTime:   2,
+		},
+		{
+			name: "refusal",
+			setup: func(state *world.State) {
+				state.Kaya.Trust = 0
+				state.Kaya.Stress = 60
+			},
+			action:     intent.MoveAction{Direction: "east", Evidence: "go east"},
+			wantStatus: game.ActionRefused,
+		},
+		{
+			name: "autonomy clarification",
+			setup: func(state *world.State) {
+				state.Kaya.Trust = 0
+			},
+			action:     intent.MoveAction{Direction: "east", Evidence: "go east"},
+			wantStatus: game.ActionClarification,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := scenario.NewPrototypeWorld()
+			tt.setup(state)
+			plan := intent.SemanticPlan{
+				Actions:   []intent.SemanticAction{tt.action, intent.WaitAction{Evidence: "wait"}},
+				Questions: []intent.FactQuestion{{Kind: game.FactLifeStatus, Target: "desk", TargetMode: intent.TargetOne}},
+			}
+
+			got := NewExecutor(state).ExecuteSemantic(plan, 0, nil)
+
+			if len(got.Result.Outcomes) != 1 || got.Result.Outcomes[0].Result.Status != tt.wantStatus {
+				t.Fatalf("outcomes = %#v, want one %q outcome", got.Result.Outcomes, tt.wantStatus)
+			}
+			if len(got.Result.QuestionFacts) != 1 || got.Result.QuestionFacts[0].Kind != game.FactFailure {
+				t.Fatalf("question facts = %#v, want represented unknown life status", got.Result.QuestionFacts)
+			}
+			if state.NowSeconds != tt.wantTime {
+				t.Fatalf("elapsed = %d, want %d with no later wait", state.NowSeconds, tt.wantTime)
+			}
+		})
+	}
+}
+
 func reference(mention string) intent.Reference {
 	return intent.Reference{Mention: mention, Quantity: intent.TargetOne}
 }
@@ -213,4 +444,35 @@ func waitThenSearchDoctorPlan() intent.SemanticPlan {
 		intent.WaitAction{Evidence: "wait"},
 		intent.SearchAction{Target: reference("doctor"), Evidence: "search the doctor"},
 	}}
+}
+
+func ambiguousUseState(t *testing.T) (*world.State, game.ItemID, game.DoorID) {
+	t.Helper()
+	const (
+		roomID game.RoomID = "junction"
+		keyA   game.ItemID = "key_a"
+		keyB   game.ItemID = "key_b"
+		doorA  game.DoorID = "door_a"
+		doorB  game.DoorID = "door_b"
+	)
+	state := world.NewState(roomID)
+	state.Rooms[roomID] = world.Room{
+		ID: roomID, Name: "Junction", Visibility: world.VisibilityLit,
+		Exits: []world.Exit{
+			{Direction: "north", To: "north_room", Door: doorA},
+			{Direction: "south", To: "south_room", Door: doorB},
+		},
+	}
+	state.Rooms["north_room"] = world.Room{ID: "north_room", Name: "North Room", Visibility: world.VisibilityLit}
+	state.Rooms["south_room"] = world.Room{ID: "south_room", Name: "South Room", Visibility: world.VisibilityLit}
+	state.Items[keyA] = world.Item{ID: keyA, Name: "Brass Key", Aliases: []string{"key"}, Portable: true}
+	state.Items[keyB] = world.Item{ID: keyB, Name: "Small Key", Aliases: []string{"key"}, Portable: true}
+	state.AddInventory(keyA)
+	state.AddInventory(keyB)
+	state.Doors[doorA] = world.Door{ID: doorA, Name: "North Door", Aliases: []string{"door"}, From: roomID, To: "north_room", State: world.DoorLocked, RequiredKey: keyB}
+	state.Doors[doorB] = world.Door{ID: doorB, Name: "South Door", Aliases: []string{"door"}, From: roomID, To: "south_room", State: world.DoorLocked, RequiredKey: keyA}
+	if err := state.ObserveRoom(roomID, ""); err != nil {
+		t.Fatal(err)
+	}
+	return state, keyA, doorB
 }

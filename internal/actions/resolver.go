@@ -11,7 +11,14 @@ import (
 )
 
 type Resolver struct {
-	state *world.State
+	state    *world.State
+	grounded *GroundedSelection
+}
+
+type GroundedSelection struct {
+	ObjectID game.ObjectID
+	ItemID   game.ItemID
+	DoorID   game.DoorID
 }
 
 func NewResolver(state *world.State) Resolver {
@@ -25,8 +32,6 @@ func (r Resolver) Resolve(in intent.Intent) game.ActionResult {
 	if r.state == nil {
 		return failed("missing_world", "The connection is unstable. I cannot read the room state.")
 	}
-	in = r.canonicalizeGroundedIDs(in)
-
 	if result, ok := r.autonomyResult(in); ok {
 		return result
 	}
@@ -64,32 +69,34 @@ func (r Resolver) Resolve(in intent.Intent) game.ActionResult {
 	return r.finish(result)
 }
 
-func (r Resolver) canonicalizeGroundedIDs(in intent.Intent) intent.Intent {
+func (r Resolver) ResolveGrounded(in intent.Intent, selection GroundedSelection) game.ActionResult {
+	r.grounded = &selection
+	return r.Resolve(r.canonicalizeGroundedSelection(in, selection))
+}
+
+func (r Resolver) canonicalizeGroundedSelection(in intent.Intent, selection GroundedSelection) intent.Intent {
 	switch in.Action {
 	case intent.ActionInspect, intent.ActionSearch, intent.ActionTalk:
-		if object, ok := r.state.Objects[game.ObjectID(in.Target)]; ok {
+		if object, ok := r.state.Objects[selection.ObjectID]; ok {
 			in.Target = object.Name
 		}
 	case intent.ActionTakeItem:
-		if item, ok := r.state.Items[game.ItemID(in.Target)]; ok {
+		if item, ok := r.state.Items[selection.ItemID]; ok {
 			in.Target = item.Name
 		}
-		if item, ok := r.state.Items[game.ItemID(in.Item)]; ok {
-			in.Item = item.Name
-		}
 	case intent.ActionUseItem:
-		if item, ok := r.state.Items[game.ItemID(in.Item)]; ok {
+		if item, ok := r.state.Items[selection.ItemID]; ok {
 			in.Item = item.Name
 		}
-		if door, ok := r.state.Doors[game.DoorID(in.Target)]; ok {
+		if door, ok := r.state.Doors[selection.DoorID]; ok {
 			in.Target = door.Name
 		}
 	case intent.ActionTurnOn, intent.ActionTurnOff:
-		if item, ok := r.state.Items[game.ItemID(in.Item)]; ok {
+		if item, ok := r.state.Items[selection.ItemID]; ok {
 			in.Item = item.Name
 		}
 	case intent.ActionListen:
-		if door, ok := r.state.Doors[game.DoorID(in.Target)]; ok {
+		if door, ok := r.state.Doors[selection.DoorID]; ok {
 			in.Target = door.Name
 		}
 	}
@@ -98,6 +105,17 @@ func (r Resolver) canonicalizeGroundedIDs(in intent.Intent) intent.Intent {
 
 func (r Resolver) inspect(in intent.Intent) game.ActionResult {
 	if strings.TrimSpace(in.Target) != "" {
+		if objectID := r.groundedObjectID(); objectID != "" {
+			object, ok, err := r.visibleGroundedObject(objectID)
+			if err != nil {
+				return failed("inspect_failed", err.Error())
+			}
+			if !ok {
+				return failed("object_not_found", "I cannot see that here.")
+			}
+			result := makeResult("inspected_object", 5, object.Description)
+			return r.withObjectObservation(result, object, world.ObservationInspect)
+		}
 		if r.targetIsCurrentRoom(in.Target) {
 			in.Target = ""
 			return r.inspect(in)
@@ -228,21 +246,34 @@ func (r Resolver) search(in intent.Intent) game.ActionResult {
 		return clarification("What should I search?")
 	}
 
-	resolution, err := r.state.ResolveObjectGroup(in.Target, false)
-	if err != nil {
-		return failed("search_failed", err.Error())
-	}
-	if resolution.Ambiguous() {
-		return objectAmbiguity(resolution)
-	}
-	if resolution.Missing() {
-		if r.objectExistsButIsNotVisible(in.Target) {
-			return failed("object_not_visible", "It is too dark for me to search that.")
+	var object world.Object
+	if objectID := r.groundedObjectID(); objectID != "" {
+		var ok bool
+		var err error
+		object, ok, err = r.visibleGroundedObject(objectID)
+		if err != nil {
+			return failed("search_failed", err.Error())
 		}
-		return failed("object_not_found", "I cannot see that here.")
+		if !ok {
+			return failed("object_not_found", "I cannot see that here.")
+		}
+	} else {
+		resolution, err := r.state.ResolveObjectGroup(in.Target, false)
+		if err != nil {
+			return failed("search_failed", err.Error())
+		}
+		if resolution.Ambiguous() {
+			return objectAmbiguity(resolution)
+		}
+		if resolution.Missing() {
+			if r.objectExistsButIsNotVisible(in.Target) {
+				return failed("object_not_visible", "It is too dark for me to search that.")
+			}
+			return failed("object_not_found", "I cannot see that here.")
+		}
+		object = resolution.Matches[0]
 	}
 
-	object := resolution.Matches[0]
 	if !object.Searchable {
 		return r.withObjectObservation(failed("not_searchable", "I do not see a useful way to search that."), object, world.ObservationSearch)
 	}
@@ -307,7 +338,10 @@ func (r Resolver) takeItem(in intent.Intent) game.ActionResult {
 			if !ok {
 				continue
 			}
-			if !world.MatchesTarget(itemTarget, item.Name, item.Aliases) {
+			if selected := r.groundedItemID(); selected != "" && itemID != selected {
+				continue
+			}
+			if r.groundedItemID() == "" && !world.MatchesTarget(itemTarget, item.Name, item.Aliases) {
 				continue
 			}
 			if r.state.HasItem(itemID) {
@@ -373,6 +407,13 @@ func (r Resolver) useItem(in intent.Intent) game.ActionResult {
 	}
 
 	resolution, err := r.state.ResolveDoor(doorTarget)
+	if doorID := r.groundedDoorID(); doorID != "" {
+		door, ok := r.state.Doors[doorID]
+		if !ok {
+			return failed("door_not_found", "I cannot see that door here.")
+		}
+		return r.unlockDoor(door, keyID)
+	}
 	if err != nil {
 		return failed("use_failed", err.Error())
 	}
@@ -683,6 +724,10 @@ func (r Resolver) targetIsCurrentRoom(target string) bool {
 }
 
 func (r Resolver) findInventoryItem(target string) (game.ItemID, bool) {
+	if itemID := r.groundedItemID(); itemID != "" {
+		_, exists := r.state.Items[itemID]
+		return itemID, exists && r.state.Inventory[itemID]
+	}
 	for itemID := range r.state.Inventory {
 		item, ok := r.state.Items[itemID]
 		if !ok {
@@ -693,6 +738,40 @@ func (r Resolver) findInventoryItem(target string) (game.ItemID, bool) {
 		}
 	}
 	return "", false
+}
+
+func (r Resolver) groundedObjectID() game.ObjectID {
+	if r.grounded == nil {
+		return ""
+	}
+	return r.grounded.ObjectID
+}
+
+func (r Resolver) groundedItemID() game.ItemID {
+	if r.grounded == nil {
+		return ""
+	}
+	return r.grounded.ItemID
+}
+
+func (r Resolver) groundedDoorID() game.DoorID {
+	if r.grounded == nil {
+		return ""
+	}
+	return r.grounded.DoorID
+}
+
+func (r Resolver) visibleGroundedObject(objectID game.ObjectID) (world.Object, bool, error) {
+	objects, err := r.state.VisibleObjects()
+	if err != nil {
+		return world.Object{}, false, err
+	}
+	for _, object := range objects {
+		if object.ID == objectID {
+			return object, true, nil
+		}
+	}
+	return world.Object{}, false, nil
 }
 
 func (r Resolver) findKnownItem(target string) (game.ItemID, world.Item, bool) {
