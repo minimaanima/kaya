@@ -36,6 +36,17 @@ type State struct {
 	ScheduledEvents []ScheduledEvent
 }
 
+// GroundingView is a detached view of entities that may be referenced from the
+// current room. It deliberately excludes hidden and unknown world entities.
+type GroundingView struct {
+	Objects         []Object
+	DiscoveredItems []Item
+	InventoryItems  []Item
+	Doors           []Door
+	Exits           []Exit
+	RecentReferents []game.ReferentGroup
+}
+
 func NewState(currentRoomID game.RoomID) *State {
 	return &State{
 		CurrentRoomID:       currentRoomID,

@@ -61,6 +61,108 @@ func (s *State) PerceptionSnapshot() (game.PerceptionSnapshot, error) {
 	return snapshot, nil
 }
 
+func (s *State) GroundingView() (GroundingView, error) {
+	objects, err := s.VisibleObjects()
+	if err != nil {
+		return GroundingView{}, err
+	}
+	exits, err := s.AvailableExits()
+	if err != nil {
+		return GroundingView{}, err
+	}
+
+	view := GroundingView{
+		Objects:         cloneGroundingObjects(objects),
+		DiscoveredItems: s.groundingDiscoveredItems(objects),
+		InventoryItems:  s.groundingInventoryItems(),
+		Doors:           s.groundingDoors(exits),
+		Exits:           append([]Exit(nil), exits...),
+		RecentReferents: cloneReferentGroups(s.perceivedReferents(objects)),
+	}
+	sort.Slice(view.Objects, func(i, j int) bool { return view.Objects[i].ID < view.Objects[j].ID })
+	sort.Slice(view.DiscoveredItems, func(i, j int) bool { return view.DiscoveredItems[i].ID < view.DiscoveredItems[j].ID })
+	sort.Slice(view.InventoryItems, func(i, j int) bool { return view.InventoryItems[i].ID < view.InventoryItems[j].ID })
+	sort.Slice(view.Doors, func(i, j int) bool { return view.Doors[i].ID < view.Doors[j].ID })
+	sort.Slice(view.Exits, func(i, j int) bool { return view.Exits[i].Direction < view.Exits[j].Direction })
+	return view, nil
+}
+
+func cloneGroundingObjects(objects []Object) []Object {
+	cloned := make([]Object, 0, len(objects))
+	for _, object := range objects {
+		object.Aliases = append([]string(nil), object.Aliases...)
+		object.ContainedItems = append([]game.ItemID(nil), object.ContainedItems...)
+		object.RevealedItemIDs = append([]game.ItemID(nil), object.RevealedItemIDs...)
+		cloned = append(cloned, object)
+	}
+	return cloned
+}
+
+func (s *State) groundingDiscoveredItems(objects []Object) []Item {
+	seen := make(map[game.ItemID]bool)
+	items := make([]Item, 0)
+	for _, object := range objects {
+		for _, itemID := range object.ContainedItems {
+			if seen[itemID] || !s.DiscoveredItems[itemID] || s.Inventory[itemID] {
+				continue
+			}
+			item, ok := s.Items[itemID]
+			if !ok {
+				continue
+			}
+			seen[itemID] = true
+			item.Aliases = append([]string(nil), item.Aliases...)
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
+func (s *State) groundingInventoryItems() []Item {
+	items := make([]Item, 0, len(s.Inventory))
+	for itemID, present := range s.Inventory {
+		if !present {
+			continue
+		}
+		item, ok := s.Items[itemID]
+		if !ok {
+			continue
+		}
+		item.Aliases = append([]string(nil), item.Aliases...)
+		items = append(items, item)
+	}
+	return items
+}
+
+func (s *State) groundingDoors(exits []Exit) []Door {
+	seen := make(map[game.DoorID]bool, len(exits))
+	doors := make([]Door, 0, len(exits))
+	for _, exit := range exits {
+		if exit.Door == "" || seen[exit.Door] {
+			continue
+		}
+		door, ok := s.Doors[exit.Door]
+		if !ok {
+			continue
+		}
+		seen[exit.Door] = true
+		door.Aliases = append([]string(nil), door.Aliases...)
+		doors = append(doors, door)
+	}
+	return doors
+}
+
+func cloneReferentGroups(groups []game.ReferentGroup) []game.ReferentGroup {
+	cloned := make([]game.ReferentGroup, 0, len(groups))
+	for _, group := range groups {
+		cloned = append(cloned, game.ReferentGroup{
+			ObjectIDs: append([]game.ObjectID(nil), group.ObjectIDs...),
+			ItemIDs:   append([]game.ItemID(nil), group.ItemIDs...),
+		})
+	}
+	return cloned
+}
+
 func (s *State) RememberObjects(ids []game.ObjectID) {
 	if s == nil {
 		return
