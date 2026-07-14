@@ -144,6 +144,60 @@ func TestGroundNonDemonstrativeExactMatchStillOutranksRecentReferent(t *testing.
 	}
 }
 
+func TestGroundLiteralDemonstrativeNameOutranksExplicitBinding(t *testing.T) {
+	state := syntheticWorld()
+	literal := state.Objects[objectRelay]
+	literal.Name = "That"
+	state.Objects[objectRelay] = literal
+
+	got := New(state).Ground(
+		intent.SearchAction{Target: reference("that", intent.TargetOne)},
+		&Binding{Role: RoleObject, CandidateIDs: []string{string(objectRelayShell)}},
+	)
+
+	assertReadyIDs(t, got, RoleObject, string(objectRelay))
+}
+
+func TestGroundLiteralDemonstrativeAliasOutranksRecentReferent(t *testing.T) {
+	state := syntheticWorld()
+	literal := state.Objects[objectRelay]
+	literal.Aliases = append(literal.Aliases, "Those Signals")
+	state.Objects[objectRelay] = literal
+	state.RecentReferents = []game.ReferentGroup{{ObjectIDs: []game.ObjectID{objectRelayShell, objectCradle}}}
+
+	got := New(state).Ground(intent.SearchAction{Target: reference("those signals", intent.TargetOne)}, nil)
+	assertReadyIDs(t, got, RoleObject, string(objectRelay))
+}
+
+func TestGroundPluralDemonstrativeTargetAllPreservesEligibleDoors(t *testing.T) {
+	state := syntheticWorld()
+	state.KnownExitDirections[testRoom]["southward"] = true
+
+	got := New(state).Ground(intent.UseAction{
+		Item:   reference("phase spindle", intent.TargetOne),
+		Target: reference("those doors", intent.TargetAll),
+	}, nil)
+
+	assertReadyIDs(t, got, RoleDoor, string(doorNorth), string(doorSouth))
+}
+
+func TestGroundPluralDemonstrativeTargetAllPreservesEligibleExits(t *testing.T) {
+	state := syntheticWorld()
+	state.KnownExitDirections[testRoom]["southward"] = true
+	view, err := state.GroundingView()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, clarification, missing := resolveReference(
+		reference("those exits", intent.TargetAll), RoleExit, exitCandidates(view), view, nil,
+	)
+	if clarification != nil || missing != nil {
+		t.Fatalf("resolveReference() clarification/missing = %#v/%#v, want resolved exits", clarification, missing)
+	}
+	assertCandidateIDs(t, resolved.Candidates, "northward", "southward")
+}
+
 func TestGroundListenTargetsDoorAndExploreHasNoEntityTarget(t *testing.T) {
 	state := syntheticWorld()
 
@@ -163,7 +217,7 @@ func TestGroundListenTargetsDoorAndExploreHasNoEntityTarget(t *testing.T) {
 
 func TestGroundUsesCandidateBoundIDs(t *testing.T) {
 	state := syntheticWorld()
-	action := intent.SearchAction{Target: reference("relay", intent.TargetOne)}
+	action := intent.SearchAction{Target: reference("it", intent.TargetOne)}
 	binding := &Binding{Role: RoleObject, CandidateIDs: []string{string(objectRelayShell)}}
 
 	got := New(state).Ground(action, binding)
@@ -183,7 +237,7 @@ func TestGroundTargetAllBindingRejectsPartiallyStaleObjectSelection(t *testing.T
 	boundIDs := []string{string(objectRelay), string(objectRelayShell)}
 
 	got := New(state).Ground(
-		intent.SearchAction{Target: reference("relay", intent.TargetAll)},
+		intent.SearchAction{Target: reference("them", intent.TargetAll)},
 		&Binding{Role: RoleObject, CandidateIDs: boundIDs},
 	)
 
@@ -199,7 +253,7 @@ func TestGroundTargetAllBindingRejectsPartiallyStaleDoorSelection(t *testing.T) 
 
 	got := New(state).Ground(intent.UseAction{
 		Item:   reference("phase spindle", intent.TargetOne),
-		Target: reference("iris hatch", intent.TargetAll),
+		Target: reference("those doors", intent.TargetAll),
 	}, &Binding{Role: RoleDoor, CandidateIDs: boundIDs})
 
 	assertStaleBinding(t, got, RoleDoor, intent.TargetAll, boundIDs, string(doorSouth))

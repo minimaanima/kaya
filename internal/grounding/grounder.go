@@ -133,6 +133,13 @@ func resolveReference(reference intent.Reference, role Role, candidates []Candid
 	if quantity == "" || quantity == intent.TargetSingle {
 		quantity = intent.TargetOne
 	}
+	exact := exactMatches(mention, candidates)
+	if len(exact) > 0 {
+		if quantity != intent.TargetAll && len(exact) > 1 {
+			return GroundedReference{}, &Clarification{Role: role, Mention: mention, Candidates: exact}, nil
+		}
+		return GroundedReference{Role: role, Mention: mention, Quantity: quantity, Candidates: exact}, nil, nil
+	}
 
 	if binding != nil && binding.Role == role {
 		bound, stale := revalidateCandidateIDs(candidates, binding.CandidateIDs)
@@ -157,9 +164,6 @@ func resolveReference(reference intent.Reference, role Role, candidates []Candid
 		}
 		if len(recent) == 0 {
 			recent = cloneCandidates(candidates)
-			if len(recent) > 1 {
-				return GroundedReference{}, &Clarification{Role: role, Mention: mention, Candidates: recent}, nil
-			}
 		}
 		if quantity != intent.TargetAll && len(recent) > 1 {
 			return GroundedReference{}, &Clarification{Role: role, Mention: mention, Candidates: recent}, nil
@@ -175,6 +179,39 @@ func resolveReference(reference intent.Reference, role Role, candidates []Candid
 		return GroundedReference{}, &Clarification{Role: role, Mention: mention, Candidates: matches}, nil
 	}
 	return GroundedReference{Role: role, Mention: mention, Quantity: quantity, Candidates: matches}, nil, nil
+}
+
+func exactMatches(mention string, candidates []Candidate) []Candidate {
+	target := normalizeReference(mention)
+	if target == "" {
+		return nil
+	}
+
+	topScore := 0
+	matches := make([]Candidate, 0)
+	for _, candidate := range candidates {
+		score := 0
+		if normalizeReference(candidate.Name) == target {
+			score = scoreExactName
+		} else {
+			for _, alias := range candidate.Aliases {
+				if normalizeReference(alias) == target {
+					score = scoreAlias
+					break
+				}
+			}
+		}
+		if score == 0 || score < topScore {
+			continue
+		}
+		if score > topScore {
+			topScore = score
+			matches = matches[:0]
+		}
+		matches = append(matches, cloneCandidate(candidate))
+	}
+	sortCandidates(matches)
+	return matches
 }
 
 func rankedMatches(mention string, candidates []Candidate) []Candidate {
