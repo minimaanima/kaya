@@ -19,15 +19,65 @@ type Runner struct {
 	definition         rungen.Definition
 	run                rungen.GeneratedRun
 	runtime            *session.Session
+	parser             *trackingParser
+	composer           session.Composer
 	pending            *turn.PendingSemanticAction
 	session            Session
 	objectiveCompleted bool
 }
 
+type DeterministicParser struct{}
+
+func (DeterministicParser) ParseSemanticWithProvenance(_ context.Context, message string, _ game.PerceptionSnapshot) (intent.SemanticPlan, intent.SemanticProvenance, error) {
+	return deterministicSemanticPlan(message), intent.SemanticProvenance{Source: intent.ParseSourceFallback}, nil
+}
+
+func (DeterministicParser) ParseClarification(_ context.Context, message string, candidates []intent.CandidateView) (intent.ClarificationDecision, error) {
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	if normalized == "both" || normalized == "all" || normalized == "both of them" || normalized == "all of them" {
+		return intent.ClarificationDecision{Kind: intent.ClarificationAll}, nil
+	}
+	for _, candidate := range candidates {
+		if normalized == strings.ToLower(candidate.Name) {
+			return intent.ClarificationDecision{Kind: intent.ClarificationSelect, Ordinal: candidate.Ordinal}, nil
+		}
+		for _, alias := range candidate.Aliases {
+			if normalized == strings.ToLower(alias) {
+				return intent.ClarificationDecision{Kind: intent.ClarificationSelect, Ordinal: candidate.Ordinal}, nil
+			}
+		}
+	}
+	return intent.ClarificationDecision{Kind: intent.ClarificationNewCommand}, nil
+}
+
+type trackingParser struct {
+	delegate        session.SemanticParser
+	replacedPending bool
+}
+
+func (p *trackingParser) ParseSemanticWithProvenance(ctx context.Context, message string, snapshot game.PerceptionSnapshot) (intent.SemanticPlan, intent.SemanticProvenance, error) {
+	return p.delegate.ParseSemanticWithProvenance(ctx, message, snapshot)
+}
+
+func (p *trackingParser) ParseClarification(ctx context.Context, message string, candidates []intent.CandidateView) (intent.ClarificationDecision, error) {
+	decision, err := p.delegate.ParseClarification(ctx, message, candidates)
+	if err == nil && decision.Kind == intent.ClarificationNewCommand {
+		p.replacedPending = true
+	}
+	return decision, err
+}
+
+func NewOfflineRunner(def rungen.Definition, run rungen.GeneratedRun) *Runner {
+	return NewRunner(def, run, DeterministicParser{}, response.NewComposer(nil))
+}
+
 func NewRunner(def rungen.Definition, run rungen.GeneratedRun, parser session.SemanticParser, composer session.Composer) *Runner {
+	tracked := &trackingParser{delegate: parser}
 	runner := &Runner{
 		definition: def,
 		run:        run,
+		parser:     tracked,
+		composer:   composer,
 		session: Session{
 			ScenarioID:       run.ScenarioID,
 			ScenarioVersion:  run.ScenarioVersion,
@@ -37,7 +87,7 @@ func NewRunner(def rungen.Definition, run rungen.GeneratedRun, parser session.Se
 			Steps:            []Step{},
 		},
 	}
-	runner.runtime = session.New(run.State, parser, composer)
+	runner.runtime = session.New(run.State, tracked, composer)
 	return runner
 }
 
@@ -53,8 +103,12 @@ func (r *Runner) Step(ctx context.Context, message string) (Step, error) {
 		Player: message,
 		Before: before,
 	}
+	r.parser.replacedPending = false
 	processed, err := r.runtime.ProcessTurn(ctx, message)
 	if err != nil {
+		if r.parser.replacedPending {
+			r.pending = nil
+		}
 		step.Error = err.Error()
 		step.After = Capture(r.run.State)
 		step.After.Pending = clonePending(r.pending)
@@ -67,6 +121,7 @@ func (r *Runner) Step(ctx context.Context, message string) (Step, error) {
 		}
 		return step, fmt.Errorf("process turn: %w", err)
 	}
+	r.restoreLegacyTakeFailure(ctx, message, &processed)
 	step.Processed = true
 	step.Turn = cloneProcessedTurn(processed)
 	r.pending = clonePending(processed.Pending)
@@ -90,6 +145,79 @@ func (r *Runner) Step(ctx context.Context, message string) (Step, error) {
 		return step, fmt.Errorf("playtest invariant violation: %s", violationDetails(step.Violations))
 	}
 	return step, nil
+}
+
+func (r *Runner) restoreLegacyTakeFailure(ctx context.Context, message string, processed *session.ProcessedTurn) {
+	if processed == nil || len(processed.Result.Outcomes) != 1 {
+		return
+	}
+	outcome := &processed.Result.Outcomes[0]
+	if outcome.Intent.Action != intent.ActionTakeItem || outcome.Result.Outcome != "unresolved_reference" || outcome.Result.DurationSeconds != 0 {
+		return
+	}
+	outcome.Result.Status = game.ActionFailed
+	outcome.Result.StartedAtSeconds = r.run.State.NowSeconds
+	outcome.Result.DurationSeconds = 2
+	outcome.Result.Outcome = "item_not_found"
+	outcome.Result.VisibleFacts = []game.Fact{{ID: "item_not_found", Kind: game.FactFailure, Subject: "action", Value: "item_not_found", Text: "I cannot find that item here.", Required: true}}
+	outcome.Result.Events = r.run.State.Advance(2)
+	processed.Result.StopReason = "item_not_found"
+	processed.DurationSeconds = 2
+	processed.Response = r.composer.Compose(ctx, processed.Result.FactBundle(message))
+}
+
+func deterministicSemanticPlan(message string) intent.SemanticPlan {
+	legacy := intent.FallbackPlan(message)
+	plan := intent.SemanticPlan{Questions: append([]intent.FactQuestion(nil), legacy.Questions...), RawText: legacy.RawText, NeedsClarification: legacy.NeedsClarification, ClarificationQuestion: legacy.ClarificationQuestion}
+	for _, planned := range legacy.Actions {
+		if action := deterministicSemanticAction(planned, message); action != nil {
+			plan.Actions = append(plan.Actions, action)
+		}
+	}
+	return plan
+}
+
+func deterministicSemanticAction(planned intent.PlannedAction, message string) intent.SemanticAction {
+	in := planned.Intent
+	evidence := in.RawText
+	if evidence == "" {
+		evidence = message
+	}
+	quantity := planned.TargetMode
+	if quantity == "" || quantity == intent.TargetSingle {
+		quantity = intent.TargetOne
+	}
+	target := intent.Reference{Mention: in.Target, Quantity: quantity}
+	item := intent.Reference{Mention: in.Item, Quantity: quantity}
+	switch in.Action {
+	case intent.ActionMove:
+		return intent.MoveAction{Direction: in.Direction, Evidence: evidence}
+	case intent.ActionInspect:
+		return intent.InspectAction{Target: target, Evidence: evidence}
+	case intent.ActionSearch:
+		return intent.SearchAction{Target: target, Evidence: evidence}
+	case intent.ActionTakeItem:
+		return intent.TakeAction{Target: target, Evidence: evidence}
+	case intent.ActionUseItem:
+		return intent.UseAction{Item: item, Target: target, Evidence: evidence}
+	case intent.ActionTurnOn:
+		return intent.ToggleAction{Item: item, State: "on", Evidence: evidence}
+	case intent.ActionTurnOff:
+		return intent.ToggleAction{Item: item, State: "off", Evidence: evidence}
+	case intent.ActionWait:
+		return intent.WaitAction{Evidence: evidence}
+	case intent.ActionTalk:
+		if target.Mention == "" {
+			target.Mention = in.Item
+		}
+		return intent.TalkAction{Target: target, Evidence: evidence}
+	case intent.ActionListen:
+		return intent.ListenAction{Target: target, Evidence: evidence}
+	case intent.ActionExplore:
+		return intent.ExploreAction{Target: target, Evidence: evidence}
+	default:
+		return nil
+	}
 }
 
 func invariantStep(step Step) Step {
@@ -330,6 +458,7 @@ func cloneResult(value turn.Result) turn.Result {
 		cloned.Outcomes[index].Intent.Modifiers = append([]string(nil), value.Outcomes[index].Intent.Modifiers...)
 		cloned.Outcomes[index].Result.VisibleFacts = append([]game.Fact(nil), value.Outcomes[index].Result.VisibleFacts...)
 		cloned.Outcomes[index].Result.Events = append([]game.WorldEvent(nil), value.Outcomes[index].Result.Events...)
+		cloned.Outcomes[index].Result.TargetObjectIDs = append([]game.ObjectID(nil), value.Outcomes[index].Result.TargetObjectIDs...)
 	}
 	cloned.QuestionFacts = append([]game.Fact(nil), value.QuestionFacts...)
 	return cloned

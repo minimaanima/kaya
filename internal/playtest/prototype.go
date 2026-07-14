@@ -68,6 +68,10 @@ func RunPrototypeSession(ctx context.Context, runner *Runner, run rungen.Generat
 			return fmt.Errorf("seed %d placements=%#v message %q: %w\nsession=%#v", seed, run.Placements, message, err, runner.Session())
 		}
 	}
+	completed := runner.Session()
+	if runner.State().CurrentRoomID != runner.definition.WinRoom || completed.ObjectiveEmissions != 1 {
+		return fmt.Errorf("seed %d placements=%#v: objective incomplete: room=%q emissions=%d", seed, run.Placements, runner.State().CurrentRoomID, completed.ObjectiveEmissions)
+	}
 	return nil
 }
 

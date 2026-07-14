@@ -22,7 +22,7 @@ func TestPrototypeThousandPhraseVariedSessionsReachObjective(t *testing.T) {
 	for seed := int64(1); seed <= 1000; seed++ {
 		run := prototypeGeneratedRun(t, seed)
 		placementsSeen[placementKey(run.Placements)] = true
-		runner := NewRunner(runscenario.PrototypeDefinition(), run, fallbackParser{}, fallbackComposer{})
+		runner := NewOfflineRunner(runscenario.PrototypeDefinition(), run)
 		messages, err := PrototypeWinningMessages(run, seed)
 		if err != nil {
 			t.Fatalf("seed %d placements=%#v: %v", seed, run.Placements, err)
@@ -58,6 +58,17 @@ func TestPrototypeThousandPhraseVariedSessionsReachObjective(t *testing.T) {
 	}
 	if !reflect.DeepEqual(unlockSeen, wantUnlocks) || !reflect.DeepEqual(unlockSucceeded, wantUnlocks) {
 		t.Fatalf("unlock variants seen=%s succeeded=%s, want=%s", fmt.Sprint(unlockSeen), fmt.Sprint(unlockSucceeded), fmt.Sprint(wantUnlocks))
+	}
+}
+
+func TestRunPrototypeSessionRejectsIncompleteObjective(t *testing.T) {
+	run := mustGeneratedRun(t, 1)
+	runner := NewRunner(runscenario.PrototypeDefinition(), run, intent.NewParser(nil), fallbackComposer{})
+
+	err := RunPrototypeSession(context.Background(), runner, run, 1)
+
+	if err == nil || !strings.Contains(err.Error(), "objective") {
+		t.Fatalf("error = %v, want objective completion failure", err)
 	}
 }
 

@@ -203,6 +203,20 @@ func writeClarificationEvidence(b *strings.Builder, processed session.ProcessedT
 		fmt.Fprintf(b, "- candidate %d: id=%q name=%q aliases=[%s]\n", index+1, candidate.ID, candidate.Name, strings.Join(candidate.Aliases, ","))
 	}
 	b.WriteByte('\n')
+	b.WriteString("Remaining typed semantic plan:\n")
+	writeSemanticPlanBody(b, processed.Pending.RemainingPlan)
+}
+
+func writeSemanticPlanBody(b *strings.Builder, plan intent.SemanticPlan) {
+	var details strings.Builder
+	for index, action := range plan.Actions {
+		fmt.Fprintf(&details, "action %d: kind=%q%s evidence=%q\n", index+1, action.ActionKind(), formatSemanticAction(action), action.SourceEvidence())
+	}
+	if details.Len() == 0 {
+		b.WriteString("- none\n\n")
+		return
+	}
+	writeFenced(details.String(), b)
 }
 
 func provenanceSource(source, expected intent.ParseSource) string {
@@ -504,6 +518,16 @@ func snapshotEntryMap(snapshot Snapshot) map[string]string {
 			entries[prefix+".id"] = candidate.ID
 			entries[prefix+".name"] = candidate.Name
 			entries[prefix+".aliases"] = strings.Join(candidate.Aliases, ",")
+		}
+		remaining := snapshot.Pending.RemainingPlan
+		entries["pending.remaining.raw_text"] = remaining.RawText
+		entries["pending.remaining.needs_clarification"] = fmt.Sprintf("%t", remaining.NeedsClarification)
+		entries["pending.remaining.clarification_question"] = remaining.ClarificationQuestion
+		for index, action := range remaining.Actions {
+			entries[fmt.Sprintf("pending.remaining.action.%d", index)] = fmt.Sprintf("kind=%q%s evidence=%q", action.ActionKind(), formatSemanticAction(action), action.SourceEvidence())
+		}
+		for index, question := range remaining.Questions {
+			entries[fmt.Sprintf("pending.remaining.question.%d", index)] = fmt.Sprintf("kind=%q target=%q target_mode=%q", question.Kind, question.Target, question.TargetMode)
 		}
 	}
 	for _, objectID := range sortedObservedFactObjectKeys(snapshot.ObservedObjectFacts) {

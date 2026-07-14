@@ -279,6 +279,27 @@ func TestRunPlaytestWritesFailingStepBeforeReturningRunError(t *testing.T) {
 	}
 }
 
+func TestRunPlaytestActualOfflineExecutorReachesObjective(t *testing.T) {
+	t.Setenv("KAYA_PLAYTEST_OLLAMA", "")
+	var captured playtest.Session
+	err := runPlaytestWith(
+		[]string{"--seed", "1"},
+		func() (int64, error) { return 0, errors.New("seed should not be generated") },
+		newPrototypePlaytestExecutor,
+		func(value playtest.Session) (string, error) {
+			captured = value
+			return "playtest_logs/seed-1.md", nil
+		},
+		io.Discard,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if captured.ObjectiveEmissions != 1 || len(captured.Steps) == 0 || captured.Steps[len(captured.Steps)-1].After.CurrentRoom != scenario.RoomStairwell {
+		t.Fatalf("offline CLI session did not reach objective: %#v", captured)
+	}
+}
+
 func TestWritePlaytestLogDelegatesToRenderMarkdown(t *testing.T) {
 	workingDirectory, err := os.Getwd()
 	if err != nil {
@@ -398,14 +419,14 @@ func TestSemanticParseLogShowsTypedActionsAndGrounding(t *testing.T) {
 		}},
 		SemanticProvenance: intent.SemanticProvenance{Source: intent.ParseSourceRepair},
 		Result: turn.Result{Outcomes: []turn.ActionOutcome{
-			{Intent: intent.Intent{Action: intent.ActionTakeItem, Target: "the key"}, Result: game.ActionResult{TargetObjectIDs: []game.ObjectID{"brass_key"}}},
-			{Intent: intent.Intent{Action: intent.ActionMove, Direction: "north"}, TargetObjectID: "stairwell_door"},
+			{Intent: intent.Intent{Action: intent.ActionTakeItem, Target: "brass_key"}},
+			{Intent: intent.Intent{Action: intent.ActionUseItem, Item: "brass_key", Target: "door_stairwell"}, TargetObjectID: "stairwell_door"},
 		}},
 	}
 
 	got := formatParseLog(processed)
 
-	for _, want := range []string{"parse: source=repair", "1:take_item", "mention=\"the key\"", "evidence=\"take the key\"", "2:move", "direction=\"north\"", "grounded_ids=[brass_key]", "grounded_object=\"stairwell_door\""} {
+	for _, want := range []string{"parse: source=repair", "1:take_item", "mention=\"the key\"", "evidence=\"take the key\"", "2:move", "direction=\"north\"", "grounded_target_id=\"brass_key\"", "grounded_item_id=\"brass_key\"", "grounded_target_id=\"door_stairwell\"", "grounded_object=\"stairwell_door\""} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("parse log %q missing %q", got, want)
 		}

@@ -263,8 +263,7 @@ func newPrototypePlaytestExecutor(options playOptions) (playtestExecutor, error)
 		return nil, fmt.Errorf("generate playtest run: %w", err)
 	}
 
-	var parser session.SemanticParser = intent.NewParser(nil)
-	var composer session.Composer = response.NewComposer(nil)
+	var runner *playtest.Runner
 	if envBool("KAYA_PLAYTEST_OLLAMA") {
 		model := envOrDefault("KAYA_OLLAMA_MODEL", defaultOllamaModel)
 		baseURL := envOrDefault("KAYA_OLLAMA_URL", llm.DefaultOllamaURL)
@@ -272,11 +271,10 @@ func newPrototypePlaytestExecutor(options playOptions) (playtestExecutor, error)
 		if err != nil {
 			return nil, err
 		}
-		parser = intent.NewParser(client)
-		composer = response.NewComposer(client)
+		runner = playtest.NewRunner(definition, generated, intent.NewParser(client), response.NewComposer(client))
+	} else {
+		runner = playtest.NewOfflineRunner(definition, generated)
 	}
-
-	runner := playtest.NewRunner(definition, generated, parser, composer)
 	return prototypePlaytestExecutor{runner: runner, generated: generated, seed: options.Seed}, nil
 }
 
@@ -925,7 +923,7 @@ func formatParseLog(processed session.ProcessedTurn) string {
 		b.WriteString(fmt.Sprintf(" questions=%d", len(plan.Questions)))
 	}
 	for i, outcome := range processed.Result.Outcomes {
-		b.WriteString(fmt.Sprintf(" | grounded %d: action=%s grounded_object=%s grounded_ids=[%s]", i+1, outcome.Intent.Action, strconvQuote(string(outcome.TargetObjectID)), joinObjectIDs(outcome.Result.TargetObjectIDs)))
+		b.WriteString(fmt.Sprintf(" | grounded %d: action=%s grounded_item_id=%s grounded_target_id=%s grounded_object=%s grounded_ids=[%s]", i+1, outcome.Intent.Action, strconvQuote(outcome.Intent.Item), strconvQuote(outcome.Intent.Target), strconvQuote(string(outcome.TargetObjectID)), joinObjectIDs(outcome.Result.TargetObjectIDs)))
 	}
 	if processed.Pending != nil {
 		ids := make([]string, len(processed.Pending.Candidates))

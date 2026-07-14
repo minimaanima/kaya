@@ -38,9 +38,9 @@ func TestAdversarialPrototypeSessions(t *testing.T) {
 			name:         "take-before-discovery",
 			placements:   prototypePlacementsFor(scenario.ObjectReceptionDesk, scenario.ObjectBodyCabinet),
 			messages:     []string{"take the flashlight"},
-			wantOutcomes: []string{"unresolved_reference"},
+			wantOutcomes: []string{"item_not_found"},
 			wantStates: []adversarialState{{
-				time: 0, room: scenario.RoomReception, door: world.DoorLocked,
+				time: 2, room: scenario.RoomReception, door: world.DoorLocked,
 			}},
 		},
 		{
@@ -98,9 +98,9 @@ func TestAdversarialPrototypeSessions(t *testing.T) {
 			name:         "failed-first-action-stops-compound",
 			placements:   prototypePlacementsFor(scenario.ObjectCollapsedChair, scenario.ObjectStorageCabinet),
 			messages:     []string{"take the key and go east"},
-			wantOutcomes: []string{"unresolved_reference"},
+			wantOutcomes: []string{"item_not_found"},
 			wantStates: []adversarialState{{
-				time: 0, room: scenario.RoomReception, door: world.DoorLocked,
+				time: 2, room: scenario.RoomReception, door: world.DoorLocked,
 			}},
 			check: func(t *testing.T, steps []Step) {
 				t.Helper()

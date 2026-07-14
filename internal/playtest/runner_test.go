@@ -32,6 +32,25 @@ type runnerClarificationParser struct {
 	clarificationCalls int
 }
 
+type replacementCommandErrorParser struct {
+	parseCalls int
+	err        error
+}
+
+func (p *replacementCommandErrorParser) ParseSemanticWithProvenance(_ context.Context, message string, _ game.PerceptionSnapshot) (intent.SemanticPlan, intent.SemanticProvenance, error) {
+	p.parseCalls++
+	if p.parseCalls > 1 {
+		return intent.SemanticPlan{}, intent.SemanticProvenance{}, p.err
+	}
+	return intent.SemanticPlan{Actions: []intent.SemanticAction{intent.SearchAction{
+		Target: intent.Reference{Mention: "doctors", Quantity: intent.TargetOne}, Evidence: message,
+	}}}, intent.SemanticProvenance{Source: intent.ParseSourceModel}, nil
+}
+
+func (p *replacementCommandErrorParser) ParseClarification(context.Context, string, []intent.CandidateView) (intent.ClarificationDecision, error) {
+	return intent.ClarificationDecision{Kind: intent.ClarificationNewCommand}, nil
+}
+
 func (p *runnerClarificationParser) ParseSemanticWithProvenance(_ context.Context, message string, _ game.PerceptionSnapshot) (intent.SemanticPlan, intent.SemanticProvenance, error) {
 	p.parseCalls++
 	return intent.SemanticPlan{
@@ -77,6 +96,29 @@ func TestRunnerSnapshotsPendingClarificationAcrossSteps(t *testing.T) {
 	again := runner.Session().Steps[0].After.Pending.Candidates[0].Aliases[0]
 	if again == "mutated" {
 		t.Fatal("runner session pending snapshot aliases stored clarification state")
+	}
+}
+
+func TestRunnerClearsPendingSnapshotWhenReplacementCommandParseFails(t *testing.T) {
+	generated := mustGeneratedRun(t, 1)
+	parser := &replacementCommandErrorParser{err: errors.New("replacement parse failed")}
+	runner := NewRunner(runscenario.PrototypeDefinition(), generated, parser, fallbackComposer{})
+	storageWithLight(runner)
+
+	first, err := runner.Step(context.Background(), "search the doctors")
+	if err != nil || first.After.Pending == nil {
+		t.Fatalf("first step pending=%#v err=%v", first.After.Pending, err)
+	}
+	second, err := runner.Step(context.Background(), "go north instead")
+	if !errors.Is(err, parser.err) {
+		t.Fatalf("error = %v, want %v", err, parser.err)
+	}
+	if second.Before.Pending == nil || second.After.Pending != nil {
+		t.Fatalf("replacement failure pending snapshots = before:%#v after:%#v", second.Before.Pending, second.After.Pending)
+	}
+	stored := runner.Session().Steps[1]
+	if stored.Before.Pending == nil || stored.After.Pending != nil {
+		t.Fatalf("stored replacement failure pending snapshots = before:%#v after:%#v", stored.Before.Pending, stored.After.Pending)
 	}
 }
 
@@ -265,6 +307,18 @@ func TestCloneResponseDeepCopiesSentenceEvidence(t *testing.T) {
 	cloned.Sentences[0].FactIDs[0] = "changed"
 	if original.Sentences[0].Text != "first" || original.Sentences[0].FactIDs[0] != "f001" {
 		t.Fatalf("original response evidence was aliased: %#v", original.Sentences)
+	}
+}
+
+func TestCloneResultDeepCopiesTargetObjectIDs(t *testing.T) {
+	original := turn.Result{Outcomes: []turn.ActionOutcome{{Result: game.ActionResult{
+		TargetObjectIDs: []game.ObjectID{"first", "second"},
+	}}}}
+	cloned := cloneResult(original)
+	cloned.Outcomes[0].Result.TargetObjectIDs[0] = "mutated"
+
+	if original.Outcomes[0].Result.TargetObjectIDs[0] != "first" {
+		t.Fatalf("cloneResult aliased target object IDs: %#v", original)
 	}
 }
 

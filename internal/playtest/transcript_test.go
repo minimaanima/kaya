@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"kaya/internal/game"
+	"kaya/internal/grounding"
 	"kaya/internal/intent"
 	"kaya/internal/kaya"
 	"kaya/internal/response"
@@ -148,6 +149,13 @@ func TestRenderMarkdownIncludesReproductionEvidence(t *testing.T) {
 }
 
 func TestRenderMarkdownReproducesSemanticRawDTOAndValidationErrors(t *testing.T) {
+	pending := &turn.PendingSemanticAction{
+		ActionIndex: 0,
+		Role:        grounding.RoleObject,
+		RemainingPlan: intent.SemanticPlan{Actions: []intent.SemanticAction{intent.UseAction{
+			Item: intent.Reference{Mention: "the key", Quantity: intent.TargetOne}, Target: intent.Reference{Mention: "the door", Quantity: intent.TargetOne}, Evidence: "use the key on the door",
+		}}, RawText: "use the key on the door"},
+	}
 	step := Step{
 		Number:    1,
 		Player:    "search the doctors",
@@ -175,7 +183,9 @@ func TestRenderMarkdownReproducesSemanticRawDTOAndValidationErrors(t *testing.T)
 				}},
 				RepairReason: errors.New("compile semantic plan"),
 			},
+			Pending: pending,
 		},
+		After: Snapshot{Pending: pending},
 	}
 
 	got := RenderMarkdown(Session{Steps: []Step{step}})
@@ -188,6 +198,9 @@ func TestRenderMarkdownReproducesSemanticRawDTOAndValidationErrors(t *testing.T)
 		"action=0 field=\"direction\" code=\"forbidden_slot\" message=\"direction is forbidden\"",
 		"Typed semantic actions:",
 		"action 1: kind=\"search\" target_mention=\"the doctors\" quantity=\"one\" evidence=\"search the doctors\"",
+		"Remaining typed semantic plan:",
+		"action 1: kind=\"use_item\" item_mention=\"the key\" item_quantity=\"one\" target_mention=\"the door\" quantity=\"one\" evidence=\"use the key on the door\"",
+		"pending.remaining.action.0=kind=\"use_item\" item_mention=\"the key\" item_quantity=\"one\" target_mention=\"the door\" quantity=\"one\" evidence=\"use the key on the door\"",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q:\n%s", want, got)
