@@ -100,11 +100,11 @@ func TestRunPrototypeSessionPreservesAndExecutesQuarterSeedCompoundTurns(t *test
 			}
 
 			compound := prototypeCompoundStep(t, runner.Session())
-			if len(compound.Turn.Plan.Actions) != 2 || len(compound.Turn.Result.Outcomes) != 2 {
+			if len(compound.Turn.SemanticPlan.Actions) != 2 || len(compound.Turn.Result.Outcomes) != 2 {
 				t.Fatalf("seed %d compound step=%#v", test.seed, compound)
 			}
 			for index, want := range test.wantActions {
-				if got := compound.Turn.Plan.Actions[index].Intent.Action; got != want {
+				if got := compound.Turn.SemanticPlan.Actions[index].ActionKind(); got != want {
 					t.Fatalf("seed %d action %d = %q, want %q\nstep=%#v", test.seed, index, got, want, compound)
 				}
 				if got := compound.Turn.Result.Outcomes[index].Result.Outcome; got != test.wantOutcomes[index] {

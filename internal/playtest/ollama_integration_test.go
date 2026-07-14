@@ -39,7 +39,7 @@ func TestLiveSliceEnabledRecognizesTruthyValues(t *testing.T) {
 func TestLiveProvenanceSummaryCountsResponseRepairs(t *testing.T) {
 	summary := liveProvenanceSummary{}
 	summary.record(Step{Processed: true, Turn: session.ProcessedTurn{
-		Provenance: intent.ParseProvenance{Source: intent.ParseSourceModel, HasRawPlan: true},
+		SemanticProvenance: intent.SemanticProvenance{Source: intent.ParseSourceModel, HasRawPlan: true},
 		Response: response.Response{
 			RepairAttempted: true,
 			RepairSucceeded: true,
@@ -56,12 +56,12 @@ func TestLiveProvenanceSummarySkipsUnprocessedTurnCounters(t *testing.T) {
 	summary.record(Step{
 		Error: "parser unavailable",
 		Turn: session.ProcessedTurn{
-			Provenance: intent.ParseProvenance{Source: intent.ParseSourceRepair, HasRawPlan: true, Canonicalized: true},
-			Response:   response.Response{UsedFallback: true, RepairAttempted: true, RepairSucceeded: true},
+			SemanticProvenance: intent.SemanticProvenance{Source: intent.ParseSourceRepair, HasRawPlan: true},
+			Response:           response.Response{UsedFallback: true, RepairAttempted: true, RepairSucceeded: true},
 		},
 	}, "unprocessed response")
 
-	if summary.Turns != 1 || summary.ProcessedTurns != 0 || summary.GeneratorUsed != 0 || summary.Repaired != 0 || summary.Canonicalized != 0 || summary.RawPlans != 0 || summary.ResolvedPlans != 0 || summary.ParseFallbacks != 0 || summary.FallbackErrors != 0 || summary.ResponseGenerated != 0 || summary.ResponseFallbacks != 0 || summary.ResponseRepairAttempts != 0 || summary.ResponseRepairSuccesses != 0 || summary.LastResponseRaw != "" {
+	if summary.Turns != 1 || summary.ProcessedTurns != 0 || summary.GeneratorUsed != 0 || summary.Repaired != 0 || summary.RawDTOs != 0 || summary.SemanticPlans != 0 || summary.ValidationErrors != 0 || summary.PendingClarifications != 0 || summary.ParseFallbacks != 0 || summary.FallbackErrors != 0 || summary.ResponseGenerated != 0 || summary.ResponseFallbacks != 0 || summary.ResponseRepairAttempts != 0 || summary.ResponseRepairSuccesses != 0 || summary.LastResponseRaw != "" {
 		t.Fatalf("live provenance = %#v", summary)
 	}
 }
@@ -72,12 +72,12 @@ func TestLiveProvenanceSummaryCountsProcessedInvariantStep(t *testing.T) {
 		Processed:  true,
 		Violations: []Violation{{Code: "response_debug_marker", Detail: "debug response"}},
 		Turn: session.ProcessedTurn{
-			Provenance: intent.ParseProvenance{Source: intent.ParseSourceModel, HasRawPlan: true, Canonicalized: true},
-			Response:   response.Response{RepairAttempted: true, RepairSucceeded: true},
+			SemanticProvenance: intent.SemanticProvenance{Source: intent.ParseSourceModel, HasRawPlan: true},
+			Response:           response.Response{RepairAttempted: true, RepairSucceeded: true},
 		},
 	}, "processed response")
 
-	if summary.Turns != 1 || summary.ProcessedTurns != 1 || summary.GeneratorUsed != 1 || summary.Canonicalized != 1 || summary.RawPlans != 1 || summary.ResolvedPlans != 1 || summary.ResponseGenerated != 1 || summary.ResponseRepairAttempts != 1 || summary.ResponseRepairSuccesses != 1 {
+	if summary.Turns != 1 || summary.ProcessedTurns != 1 || summary.GeneratorUsed != 1 || summary.RawDTOs != 1 || summary.SemanticPlans != 1 || summary.ResponseGenerated != 1 || summary.ResponseRepairAttempts != 1 || summary.ResponseRepairSuccesses != 1 {
 		t.Fatalf("live provenance = %#v", summary)
 	}
 }
@@ -85,14 +85,14 @@ func TestLiveProvenanceSummaryCountsProcessedInvariantStep(t *testing.T) {
 func TestLiveProvenanceSummaryRejectsUnknownSourceAndMissingRawPlan(t *testing.T) {
 	for _, test := range []struct {
 		name       string
-		provenance intent.ParseProvenance
+		provenance intent.SemanticProvenance
 	}{
-		{name: "empty source", provenance: intent.ParseProvenance{HasRawPlan: true}},
-		{name: "unknown source", provenance: intent.ParseProvenance{Source: intent.ParseSource("unknown"), HasRawPlan: true}},
-		{name: "missing raw plan", provenance: intent.ParseProvenance{Source: intent.ParseSourceModel}},
+		{name: "empty source", provenance: intent.SemanticProvenance{HasRawPlan: true}},
+		{name: "unknown source", provenance: intent.SemanticProvenance{Source: intent.ParseSource("unknown"), HasRawPlan: true}},
+		{name: "missing raw plan", provenance: intent.SemanticProvenance{Source: intent.ParseSourceModel}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			step := Step{Processed: true, Turn: session.ProcessedTurn{Provenance: test.provenance}}
+			step := Step{Processed: true, Turn: session.ProcessedTurn{SemanticProvenance: test.provenance}}
 			summary := liveProvenanceSummary{}
 			summary.record(step, "")
 			if reason := summary.lastTurnFailure(step); reason == "" {
@@ -107,7 +107,7 @@ func TestLiveProvenanceSummaryRejectsUnknownSourceAndMissingRawPlan(t *testing.T
 
 func TestLiveProvenanceSummaryFinalAcceptanceRequiresExactCounts(t *testing.T) {
 	validStep := Step{Processed: true, Turn: session.ProcessedTurn{
-		Provenance: intent.ParseProvenance{Source: intent.ParseSourceModel, HasRawPlan: true},
+		SemanticProvenance: intent.SemanticProvenance{Source: intent.ParseSourceModel, HasRawPlan: true},
 	}}
 	valid := liveProvenanceSummary{}
 	valid.record(validStep, "")
@@ -121,8 +121,8 @@ func TestLiveProvenanceSummaryFinalAcceptanceRequiresExactCounts(t *testing.T) {
 	}{
 		{name: "expected processed turns", mutate: func(s *liveProvenanceSummary) { s.ProcessedTurns = 0 }},
 		{name: "model or repair source", mutate: func(s *liveProvenanceSummary) { s.GeneratorUsed = 0 }},
-		{name: "raw plans", mutate: func(s *liveProvenanceSummary) { s.RawPlans = 0 }},
-		{name: "resolved plans", mutate: func(s *liveProvenanceSummary) { s.ResolvedPlans = 0 }},
+		{name: "raw DTOs", mutate: func(s *liveProvenanceSummary) { s.RawDTOs = 0 }},
+		{name: "semantic plans", mutate: func(s *liveProvenanceSummary) { s.SemanticPlans = 0 }},
 		{name: "generated responses", mutate: func(s *liveProvenanceSummary) { s.ResponseGenerated = 0 }},
 		{name: "parse fallback", mutate: func(s *liveProvenanceSummary) { s.ParseFallbacks = 1 }},
 		{name: "fallback error", mutate: func(s *liveProvenanceSummary) { s.FallbackErrors = 1 }},
@@ -222,9 +222,10 @@ type liveProvenanceSummary struct {
 	ProcessedTurns          int
 	GeneratorUsed           int
 	Repaired                int
-	Canonicalized           int
-	RawPlans                int
-	ResolvedPlans           int
+	RawDTOs                 int
+	SemanticPlans           int
+	ValidationErrors        int
+	PendingClarifications   int
 	ParseFallbacks          int
 	FallbackErrors          int
 	ResponseGenerated       int
@@ -240,20 +241,21 @@ func (s *liveProvenanceSummary) record(step Step, responseRaw string) {
 		return
 	}
 	s.ProcessedTurns++
-	provenance := step.Turn.Provenance
+	provenance := step.Turn.SemanticProvenance
 	if provenance.Source == intent.ParseSourceModel || provenance.Source == intent.ParseSourceRepair {
 		s.GeneratorUsed++
 	}
 	if provenance.Source == intent.ParseSourceRepair {
 		s.Repaired++
 	}
-	if provenance.Canonicalized {
-		s.Canonicalized++
-	}
 	if provenance.HasRawPlan {
-		s.RawPlans++
+		s.RawDTOs++
 	}
-	s.ResolvedPlans++
+	s.SemanticPlans++
+	s.ValidationErrors += len(provenance.InitialValidationErrors) + len(provenance.ValidationErrors)
+	if step.Turn.Pending != nil {
+		s.PendingClarifications++
+	}
 	if provenance.Source == intent.ParseSourceFallback {
 		s.ParseFallbacks++
 	}
@@ -275,7 +277,7 @@ func (s *liveProvenanceSummary) record(step Step, responseRaw string) {
 }
 
 func (s liveProvenanceSummary) lastTurnFailure(step Step) string {
-	provenance := step.Turn.Provenance
+	provenance := step.Turn.SemanticProvenance
 	if provenance.Source != intent.ParseSourceModel && provenance.Source != intent.ParseSourceRepair {
 		return fmt.Sprintf("intent parser source is not model or repair: %q", provenance.Source)
 	}
@@ -301,11 +303,11 @@ func (s liveProvenanceSummary) acceptanceFailure(expectedProcessed int) string {
 	if s.GeneratorUsed != s.ProcessedTurns {
 		return fmt.Sprintf("model/repair sources=%d, want processed turns %d", s.GeneratorUsed, s.ProcessedTurns)
 	}
-	if s.RawPlans != s.ProcessedTurns {
-		return fmt.Sprintf("raw plans=%d, want processed turns %d", s.RawPlans, s.ProcessedTurns)
+	if s.RawDTOs != s.ProcessedTurns {
+		return fmt.Sprintf("raw DTOs=%d, want processed turns %d", s.RawDTOs, s.ProcessedTurns)
 	}
-	if s.ResolvedPlans != s.ProcessedTurns {
-		return fmt.Sprintf("resolved plans=%d, want processed turns %d", s.ResolvedPlans, s.ProcessedTurns)
+	if s.SemanticPlans != s.ProcessedTurns {
+		return fmt.Sprintf("semantic plans=%d, want processed turns %d", s.SemanticPlans, s.ProcessedTurns)
 	}
 	if s.ParseFallbacks != 0 || s.FallbackErrors != 0 {
 		return fmt.Sprintf("parse fallbacks/errors=%d/%d, want 0/0", s.ParseFallbacks, s.FallbackErrors)
@@ -327,14 +329,15 @@ func (s liveProvenanceSummary) acceptanceFailure(expectedProcessed int) string {
 
 func (s liveProvenanceSummary) String() string {
 	return fmt.Sprintf(
-		"turns=%d processed_turns=%d generator_used=%d repaired=%d canonicalized=%d raw_plans=%d resolved_plans=%d parse_fallbacks=%d fallback_errors=%d response_generated=%d response_fallbacks=%d response_repair_attempts=%d response_repair_successes=%d last_response_raw=%q",
+		"turns=%d processed_turns=%d generator_used=%d repaired=%d raw_dtos=%d semantic_plans=%d validation_errors=%d pending_clarifications=%d parse_fallbacks=%d fallback_errors=%d response_generated=%d response_fallbacks=%d response_repair_attempts=%d response_repair_successes=%d last_response_raw=%q",
 		s.Turns,
 		s.ProcessedTurns,
 		s.GeneratorUsed,
 		s.Repaired,
-		s.Canonicalized,
-		s.RawPlans,
-		s.ResolvedPlans,
+		s.RawDTOs,
+		s.SemanticPlans,
+		s.ValidationErrors,
+		s.PendingClarifications,
 		s.ParseFallbacks,
 		s.FallbackErrors,
 		s.ResponseGenerated,

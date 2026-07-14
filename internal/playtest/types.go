@@ -5,6 +5,7 @@ import (
 	"kaya/internal/kaya"
 	"kaya/internal/rungen"
 	"kaya/internal/session"
+	"kaya/internal/turn"
 	"kaya/internal/world"
 )
 
@@ -30,6 +31,7 @@ type Snapshot struct {
 	RemainingEvents           []world.ScheduledEvent
 	ActiveLight               bool
 	Kaya                      kaya.State
+	Pending                   *turn.PendingSemanticAction
 }
 
 type Step struct {

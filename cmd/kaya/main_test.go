@@ -15,14 +15,73 @@ import (
 	"testing"
 
 	"kaya/internal/game"
+	"kaya/internal/grounding"
 	"kaya/internal/intent"
 	"kaya/internal/playtest"
 	"kaya/internal/response"
 	"kaya/internal/rungen"
 	"kaya/internal/runscenario"
 	"kaya/internal/scenario"
+	"kaya/internal/session"
 	"kaya/internal/turn"
 )
+
+type consoleSemanticParser struct {
+	parseCalls         int
+	clarificationCalls int
+}
+
+func (p *consoleSemanticParser) ParseSemanticWithProvenance(_ context.Context, message string, _ game.PerceptionSnapshot) (intent.SemanticPlan, intent.SemanticProvenance, error) {
+	p.parseCalls++
+	return intent.SemanticPlan{
+		Actions: []intent.SemanticAction{intent.SearchAction{
+			Target:   intent.Reference{Mention: "doctors", Quantity: intent.TargetOne},
+			Evidence: message,
+		}},
+		RawText: message,
+	}, intent.SemanticProvenance{Source: intent.ParseSourceModel}, nil
+}
+
+func (p *consoleSemanticParser) ParseClarification(_ context.Context, _ string, _ []intent.CandidateView) (intent.ClarificationDecision, error) {
+	p.clarificationCalls++
+	return intent.ClarificationDecision{Kind: intent.ClarificationAll}, nil
+}
+
+func TestSemanticConsoleSessionPersistsAcrossMessages(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	state.CurrentRoomID = scenario.RoomStorage
+	state.AddInventory(scenario.ItemFlashlight)
+	state.ActiveLight = true
+	if err := state.ObserveRoom(state.CurrentRoomID, state.PreviousRoomID); err != nil {
+		t.Fatal(err)
+	}
+	parser := &consoleSemanticParser{}
+	var output bytes.Buffer
+
+	err := runPlayConsole(
+		context.Background(),
+		strings.NewReader("search the doctors\nboth\nquit\n"),
+		&output,
+		state,
+		parser,
+		fakeComposer{text: "ok"},
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parser.parseCalls != 1 || parser.clarificationCalls != 1 {
+		t.Fatalf("parser calls = semantic:%d clarification:%d, want 1/1", parser.parseCalls, parser.clarificationCalls)
+	}
+	if state.NowSeconds != 65 {
+		t.Fatalf("time = %d, want five-second ambiguity plus both stored doctors searched", state.NowSeconds)
+	}
+	if !strings.Contains(output.String(), "Connection closed.") {
+		t.Fatalf("console output missing close confirmation: %q", output.String())
+	}
+}
+
+var _ session.SemanticParser = (*consoleSemanticParser)(nil)
 
 type fakePlaytestGenerator struct {
 	responses []string
@@ -331,18 +390,53 @@ func TestParseLogEnabledReadsEnvOrDebug(t *testing.T) {
 	}
 }
 
-func TestFormatParseLogShowsActions(t *testing.T) {
-	plan := intent.TurnPlan{
-		Actions: []intent.PlannedAction{
-			{Intent: intent.Intent{Action: intent.ActionTakeItem, Target: "key", Confidence: 0.8}, TargetMode: intent.TargetSingle},
-			{Intent: intent.Intent{Action: intent.ActionMove, Direction: "north", Confidence: 0.9}, TargetMode: intent.TargetSingle},
-		},
-		Confidence: 0.75,
+func TestSemanticParseLogShowsTypedActionsAndGrounding(t *testing.T) {
+	processed := session.ProcessedTurn{
+		SemanticPlan: intent.SemanticPlan{Actions: []intent.SemanticAction{
+			intent.TakeAction{Target: intent.Reference{Mention: "the key", Quantity: intent.TargetOne}, Evidence: "take the key"},
+			intent.MoveAction{Direction: "north", Evidence: "go north"},
+		}},
+		SemanticProvenance: intent.SemanticProvenance{Source: intent.ParseSourceRepair},
+		Result: turn.Result{Outcomes: []turn.ActionOutcome{
+			{Intent: intent.Intent{Action: intent.ActionTakeItem, Target: "the key"}, Result: game.ActionResult{TargetObjectIDs: []game.ObjectID{"brass_key"}}},
+			{Intent: intent.Intent{Action: intent.ActionMove, Direction: "north"}, TargetObjectID: "stairwell_door"},
+		}},
 	}
 
-	got := formatParseLog(plan)
+	got := formatParseLog(processed)
 
-	for _, want := range []string{"parse:", "confidence=0.75", "1:take_item", "target=key", "2:move", "direction=north"} {
+	for _, want := range []string{"parse: source=repair", "1:take_item", "mention=\"the key\"", "evidence=\"take the key\"", "2:move", "direction=\"north\"", "grounded_ids=[brass_key]", "grounded_object=\"stairwell_door\""} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("parse log %q missing %q", got, want)
+		}
+	}
+}
+
+func TestSemanticParseLogRetainsPendingAndRawDTOWithoutActions(t *testing.T) {
+	processed := session.ProcessedTurn{
+		SemanticPlan: intent.SemanticPlan{NeedsClarification: true, ClarificationQuestion: "Which one?"},
+		SemanticProvenance: intent.SemanticProvenance{
+			Source:     intent.ParseSourceRepair,
+			RawPlan:    intent.ModelTurnPlan{RawText: "search them"},
+			HasRawPlan: true,
+			ValidationErrors: []intent.ValidationError{{
+				Action: 0, Field: "targetMention", Code: "required_slot", Message: "targetMention is required",
+			}},
+		},
+		Pending: &turn.PendingSemanticAction{
+			ActionIndex: 0,
+			Role:        grounding.RoleDoor,
+			Candidates:  []grounding.Candidate{{ID: "left", Name: "Left Door"}, {ID: "right", Name: "Right Door"}},
+		},
+	}
+
+	got := formatParseLog(processed)
+	for _, want := range []string{
+		"actions=0",
+		"pending: action=0 role=door candidates=[left,right]",
+		`raw_dto={"actions":null`,
+		`validation_errors=[{"action":0,"field":"targetMention","code":"required_slot"`,
+	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("parse log %q missing %q", got, want)
 		}

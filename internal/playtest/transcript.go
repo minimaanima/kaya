@@ -1,6 +1,7 @@
 package playtest
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"kaya/internal/kaya"
 	"kaya/internal/response"
 	"kaya/internal/rungen"
+	"kaya/internal/session"
 	"kaya/internal/turn"
 	"kaya/internal/world"
 )
@@ -46,9 +48,11 @@ func RenderMarkdown(value Session) string {
 		fmt.Fprintf(&b, "Processed: `%t`\n\n", step.Processed)
 		writeSnapshot(&b, "Before", step.Before)
 		if step.Processed {
-			writePlan(&b, "Raw actions", step.Turn.Provenance.RawPlan, step.Turn.Provenance.HasRawPlan)
-			writePlan(&b, "Resolved actions", step.Turn.Plan, true)
-			writeProvenance(&b, step.Turn.Provenance)
+			writeModelPlan(&b, "Initial raw model DTO", step.Turn.SemanticProvenance.InitialRawPlan, step.Turn.SemanticProvenance.HasInitialRawPlan)
+			writeModelPlan(&b, "Terminal raw model DTO", step.Turn.SemanticProvenance.RawPlan, step.Turn.SemanticProvenance.HasRawPlan)
+			writeSemanticPlan(&b, step.Turn.SemanticPlan)
+			writeSemanticProvenance(&b, step.Turn.SemanticProvenance)
+			writeClarificationEvidence(&b, step.Turn)
 			fmt.Fprintf(&b, "Processed turn duration: `%d`\n\n", step.Turn.DurationSeconds)
 			writeResult(&b, step)
 			writeResponse(&b, step)
@@ -68,64 +72,137 @@ func RenderMarkdown(value Session) string {
 }
 
 func writeUnprocessedTurnEvidence(b *strings.Builder) {
-	writePlan(b, "Raw actions", intent.TurnPlan{}, false)
-	writePlan(b, "Resolved actions", intent.TurnPlan{}, false)
+	writeModelPlan(b, "Initial raw model DTO", intent.ModelTurnPlan{}, false)
+	writeModelPlan(b, "Terminal raw model DTO", intent.ModelTurnPlan{}, false)
+	b.WriteString("Typed semantic actions:\n- unavailable\n\n")
 	b.WriteString("Result evidence:\n- unavailable\n\n")
 	b.WriteString("Response evidence:\n- unavailable\n\n")
 }
 
-func writePlan(b *strings.Builder, title string, plan intent.TurnPlan, present bool) {
+func writeModelPlan(b *strings.Builder, title string, plan intent.ModelTurnPlan, present bool) {
 	b.WriteString(title)
 	b.WriteString(":\n")
 	if !present {
 		b.WriteString("- unavailable\n\n")
 		return
 	}
-
-	var details strings.Builder
-	fmt.Fprintf(&details, "confidence=%.2f needs_clarification=%t\nraw_text=%q\nclarification_question=%q\n", plan.Confidence, plan.NeedsClarification, plan.RawText, plan.ClarificationQuestion)
-	for index, action := range plan.Actions {
-		fmt.Fprintf(&details, "action %d: target_mode=%q %s\n", index+1, action.TargetMode, formatIntent(action.Intent))
+	encoded, err := json.MarshalIndent(plan, "", "  ")
+	if err != nil {
+		writeFenced("encode model DTO: "+err.Error()+"\n", b)
+		return
 	}
-	for index, question := range plan.Questions {
-		fmt.Fprintf(&details, "question %d: kind=%q target=%q targetMode=%q\n", index+1, question.Kind, question.Target, question.TargetMode)
-	}
-	if len(plan.Actions) == 0 && len(plan.Questions) == 0 {
-		details.WriteString("none\n")
-	}
-	writeFenced(details.String(), b)
+	writeFenced(string(encoded)+"\n", b)
 }
 
-func writeProvenance(b *strings.Builder, provenance intent.ParseProvenance) {
+func writeSemanticPlan(b *strings.Builder, plan intent.SemanticPlan) {
+	b.WriteString("Semantic plan metadata:\n")
+	writeFenced(fmt.Sprintf("raw_text=%q\n", plan.RawText), b)
+	b.WriteString("Typed semantic actions:\n")
+	if len(plan.Actions) == 0 {
+		b.WriteString("- none\n")
+	} else {
+		var details strings.Builder
+		for index, action := range plan.Actions {
+			fmt.Fprintf(&details, "action %d: kind=%q%s evidence=%q\n", index+1, action.ActionKind(), formatSemanticAction(action), action.SourceEvidence())
+		}
+		writeFenced(details.String(), b)
+	}
+	var questions strings.Builder
+	for index, question := range plan.Questions {
+		fmt.Fprintf(&questions, "question %d: kind=%q target=%q target_mode=%q\n", index+1, question.Kind, question.Target, question.TargetMode)
+	}
+	if questions.Len() > 0 {
+		b.WriteString("Typed fact questions:\n")
+		writeFenced(questions.String(), b)
+	}
+	fmt.Fprintf(b, "Semantic clarification requested: `%t`\n", plan.NeedsClarification)
+	if plan.ClarificationQuestion != "" {
+		writeFencedSection(b, "Semantic clarification question", plan.ClarificationQuestion)
+	} else {
+		b.WriteByte('\n')
+	}
+}
+
+func formatSemanticAction(action intent.SemanticAction) string {
+	switch typed := action.(type) {
+	case intent.MoveAction:
+		return fmt.Sprintf(" direction=%q", typed.Direction)
+	case intent.InspectAction:
+		return formatSemanticTarget(typed.Target)
+	case intent.SearchAction:
+		return formatSemanticTarget(typed.Target)
+	case intent.TakeAction:
+		return formatSemanticTarget(typed.Target)
+	case intent.UseAction:
+		return fmt.Sprintf(" item_mention=%q item_quantity=%q target_mention=%q quantity=%q", typed.Item.Mention, typed.Item.Quantity, typed.Target.Mention, typed.Target.Quantity)
+	case intent.ToggleAction:
+		return fmt.Sprintf(" item_mention=%q quantity=%q state=%q", typed.Item.Mention, typed.Item.Quantity, typed.State)
+	case intent.TalkAction:
+		return formatSemanticTarget(typed.Target)
+	case intent.ListenAction:
+		return formatSemanticTarget(typed.Target)
+	case intent.ExploreAction:
+		return formatSemanticTarget(typed.Target)
+	default:
+		return ""
+	}
+}
+
+func formatSemanticTarget(reference intent.Reference) string {
+	return fmt.Sprintf(" target_mention=%q quantity=%q", reference.Mention, reference.Quantity)
+}
+
+func writeSemanticProvenance(b *strings.Builder, provenance intent.SemanticProvenance) {
 	fmt.Fprintf(b, "Parse source: `%s`\n", provenance.Source)
 	fmt.Fprintf(b, "Generator provenance: `%s`\n", generatorProvenance(provenance.Source))
 	fmt.Fprintf(b, "Repair provenance: `%s`\n", provenanceSource(provenance.Source, intent.ParseSourceRepair))
 	fmt.Fprintf(b, "Fallback provenance: `%s`\n", provenanceSource(provenance.Source, intent.ParseSourceFallback))
-	fmt.Fprintf(b, "Raw plan captured: `%t`\n", provenance.HasRawPlan)
-	fmt.Fprintf(b, "Canonicalized: `%t`\n", provenance.Canonicalized)
-
-	errors := []namedError{
-		{name: "Fallback", err: provenance.FallbackError},
-		{name: "Repair", err: provenance.RepairReason},
+	fmt.Fprintf(b, "Initial raw DTO captured: `%t`\n", provenance.HasInitialRawPlan)
+	fmt.Fprintf(b, "Terminal raw DTO captured: `%t`\n", provenance.HasRawPlan)
+	b.WriteString("Structured validation errors:\n")
+	if len(provenance.InitialValidationErrors) == 0 && len(provenance.ValidationErrors) == 0 {
+		b.WriteString("- none\n\n")
+	} else {
+		for _, problem := range provenance.InitialValidationErrors {
+			fmt.Fprintf(b, "- attempt=initial action=%d field=%q code=%q message=%q\n", problem.Action, problem.Field, problem.Code, problem.Message)
+		}
+		for _, problem := range provenance.ValidationErrors {
+			fmt.Fprintf(b, "- attempt=terminal action=%d field=%q code=%q message=%q\n", problem.Action, problem.Field, problem.Code, problem.Message)
+		}
+		b.WriteByte('\n')
 	}
-	sort.Slice(errors, func(i, j int) bool { return errors[i].name < errors[j].name })
 	b.WriteString("Provenance errors:\n")
 	found := false
-	for _, entry := range errors {
-		if entry.err == nil {
-			continue
-		}
+	if provenance.RepairReason != nil {
 		found = true
-		writeFencedSection(b, entry.name, entry.err.Error())
+		writeFencedSection(b, "Repair", provenance.RepairReason.Error())
+	}
+	if provenance.FallbackError != nil {
+		found = true
+		writeFencedSection(b, "Fallback", provenance.FallbackError.Error())
 	}
 	if !found {
 		b.WriteString("- none\n\n")
 	}
 }
 
-type namedError struct {
-	name string
-	err  error
+func writeClarificationEvidence(b *strings.Builder, processed session.ProcessedTurn) {
+	b.WriteString("Clarification decision:\n")
+	if processed.ClarificationDecision == nil {
+		b.WriteString("- none\n\n")
+	} else {
+		fmt.Fprintf(b, "- kind=%q mention=%q ordinal=%d\n\n", processed.ClarificationDecision.Kind, processed.ClarificationDecision.Mention, processed.ClarificationDecision.Ordinal)
+	}
+	b.WriteString("Pending clarification:\n")
+	if processed.Pending == nil {
+		b.WriteString("- none\n\n")
+		return
+	}
+	fmt.Fprintf(b, "- action=%d role=%q\n", processed.Pending.ActionIndex, processed.Pending.Role)
+	for index, candidate := range processed.Pending.Candidates {
+		fmt.Fprintf(b, "- candidate %d: id=%q name=%q aliases=[%s]\n", index+1, candidate.ID, candidate.Name, strings.Join(candidate.Aliases, ","))
+	}
+	b.WriteByte('\n')
 }
 
 func provenanceSource(source, expected intent.ParseSource) string {
@@ -418,6 +495,17 @@ func snapshotEntryMap(snapshot Snapshot) map[string]string {
 	}
 	entries["last_mentioned_item_id"] = string(snapshot.LastMentionedItemID)
 	entries["last_mentioned_item_ids"] = joinItemIDsPreserved(snapshot.LastMentionedItemIDs)
+	if snapshot.Pending != nil {
+		entries["pending"] = "present"
+		entries["pending.action_index"] = fmt.Sprintf("%d", snapshot.Pending.ActionIndex)
+		entries["pending.role"] = string(snapshot.Pending.Role)
+		for index, candidate := range snapshot.Pending.Candidates {
+			prefix := fmt.Sprintf("pending.candidate.%d", index)
+			entries[prefix+".id"] = candidate.ID
+			entries[prefix+".name"] = candidate.Name
+			entries[prefix+".aliases"] = strings.Join(candidate.Aliases, ",")
+		}
+	}
 	for _, objectID := range sortedObservedFactObjectKeys(snapshot.ObservedObjectFacts) {
 		prefix := "observed_object_facts." + string(objectID)
 		entries[prefix] = "present"

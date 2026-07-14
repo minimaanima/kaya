@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"kaya/internal/game"
+	"kaya/internal/grounding"
 	"kaya/internal/intent"
 	"kaya/internal/response"
 	"kaya/internal/rungen"
@@ -17,18 +18,16 @@ import (
 type Runner struct {
 	definition         rungen.Definition
 	run                rungen.GeneratedRun
-	parser             session.Parser
-	composer           session.Composer
+	runtime            *session.Session
+	pending            *turn.PendingSemanticAction
 	session            Session
 	objectiveCompleted bool
 }
 
-func NewRunner(def rungen.Definition, run rungen.GeneratedRun, parser session.Parser, composer session.Composer) *Runner {
-	return &Runner{
+func NewRunner(def rungen.Definition, run rungen.GeneratedRun, parser session.SemanticParser, composer session.Composer) *Runner {
+	runner := &Runner{
 		definition: def,
 		run:        run,
-		parser:     parser,
-		composer:   composer,
 		session: Session{
 			ScenarioID:       run.ScenarioID,
 			ScenarioVersion:  run.ScenarioVersion,
@@ -38,6 +37,8 @@ func NewRunner(def rungen.Definition, run rungen.GeneratedRun, parser session.Pa
 			Steps:            []Step{},
 		},
 	}
+	runner.runtime = session.New(run.State, parser, composer)
+	return runner
 }
 
 func (r *Runner) Step(ctx context.Context, message string) (Step, error) {
@@ -45,15 +46,18 @@ func (r *Runner) Step(ctx context.Context, message string) (Step, error) {
 		return Step{}, fmt.Errorf("playtest runner has no world state")
 	}
 
+	before := Capture(r.run.State)
+	before.Pending = clonePending(r.pending)
 	step := Step{
 		Number: len(r.session.Steps) + 1,
 		Player: message,
-		Before: Capture(r.run.State),
+		Before: before,
 	}
-	processed, err := session.ProcessTurn(ctx, message, r.run.State, r.parser, r.composer)
+	processed, err := r.runtime.ProcessTurn(ctx, message)
 	if err != nil {
 		step.Error = err.Error()
 		step.After = Capture(r.run.State)
+		step.After.Pending = clonePending(r.pending)
 		step.Violations = append(step.Violations, CheckState(r.run.State)...)
 		step.Violations = append(step.Violations, CheckTransition(r.definition, step)...)
 		step.Violations = sortViolations(step.Violations)
@@ -65,7 +69,9 @@ func (r *Runner) Step(ctx context.Context, message string) (Step, error) {
 	}
 	step.Processed = true
 	step.Turn = cloneProcessedTurn(processed)
+	r.pending = clonePending(processed.Pending)
 	step.After = Capture(r.run.State)
+	step.After.Pending = clonePending(r.pending)
 	step.ObjectiveEmitted = !r.objectiveCompleted && step.Before.CurrentRoom != r.definition.WinRoom && step.After.CurrentRoom == r.definition.WinRoom
 	if step.ObjectiveEmitted {
 		r.objectiveCompleted = true
@@ -73,7 +79,7 @@ func (r *Runner) Step(ctx context.Context, message string) (Step, error) {
 	}
 
 	step.Violations = append(step.Violations, CheckState(r.run.State)...)
-	step.Violations = append(step.Violations, CheckTransition(r.definition, step)...)
+	step.Violations = append(step.Violations, CheckTransition(r.definition, invariantStep(step))...)
 	step.Violations = append(step.Violations, CheckResponse(step, r.run.State)...)
 	if r.session.ObjectiveEmissions > 1 {
 		step.Violations = append(step.Violations, Violation{Code: "objective_emitted_multiple_times", Detail: "objective emitted more than once"})
@@ -84,6 +90,23 @@ func (r *Runner) Step(ctx context.Context, message string) (Step, error) {
 		return step, fmt.Errorf("playtest invariant violation: %s", violationDetails(step.Violations))
 	}
 	return step, nil
+}
+
+func invariantStep(step Step) Step {
+	adapted := cloneStep(step)
+	for index := range adapted.Turn.Result.Outcomes {
+		outcome := &adapted.Turn.Result.Outcomes[index]
+		if name, ok := step.Before.DoorNames[game.DoorID(outcome.Intent.Target)]; ok {
+			outcome.Intent.Target = name
+		}
+		if name, ok := step.Before.ItemNames[game.ItemID(outcome.Intent.Item)]; ok {
+			outcome.Intent.Item = name
+		}
+		if name, ok := step.Before.ItemNames[game.ItemID(outcome.Intent.Target)]; ok {
+			outcome.Intent.Target = name
+		}
+	}
+	return adapted
 }
 
 func (r *Runner) Session() Session {
@@ -150,6 +173,7 @@ func cloneSnapshot(value Snapshot) Snapshot {
 	cloned.LastMentionedItemIDs = append([]game.ItemID(nil), value.LastMentionedItemIDs...)
 	cloned.RemainingEventTimes = append([]int(nil), value.RemainingEventTimes...)
 	cloned.RemainingEvents = append([]world.ScheduledEvent(nil), value.RemainingEvents...)
+	cloned.Pending = clonePending(value.Pending)
 	return cloned
 }
 
@@ -187,21 +211,116 @@ func cloneDoorAliases(value map[game.DoorID][]string) map[game.DoorID][]string {
 
 func cloneProcessedTurn(value session.ProcessedTurn) session.ProcessedTurn {
 	cloned := value
-	cloned.Plan = clonePlan(value.Plan)
-	cloned.Provenance.RawPlan = clonePlan(value.Provenance.RawPlan)
+	cloned.SemanticPlan = cloneSemanticPlan(value.SemanticPlan)
+	cloned.SemanticProvenance = cloneSemanticProvenance(value.SemanticProvenance)
+	cloned.ClarificationDecision = cloneClarificationDecision(value.ClarificationDecision)
+	cloned.Pending = clonePending(value.Pending)
 	cloned.Result = cloneResult(value.Result)
 	cloned.Response = cloneResponse(value.Response)
 	return cloned
 }
 
-func clonePlan(value intent.TurnPlan) intent.TurnPlan {
+func cloneSemanticProvenance(value intent.SemanticProvenance) intent.SemanticProvenance {
 	cloned := value
-	cloned.Actions = append([]intent.PlannedAction(nil), value.Actions...)
-	for index := range cloned.Actions {
-		cloned.Actions[index].Intent.Modifiers = append([]string(nil), value.Actions[index].Intent.Modifiers...)
+	cloned.RawPlan = cloneModelPlan(value.RawPlan)
+	cloned.InitialRawPlan = cloneModelPlan(value.InitialRawPlan)
+	cloned.ValidationErrors = append([]intent.ValidationError(nil), value.ValidationErrors...)
+	cloned.InitialValidationErrors = append([]intent.ValidationError(nil), value.InitialValidationErrors...)
+	return cloned
+}
+
+func cloneModelPlan(value intent.ModelTurnPlan) intent.ModelTurnPlan {
+	cloned := value
+	cloned.Actions = append([]intent.ModelAction(nil), value.Actions...)
+	cloned.Questions = append([]intent.ModelFactQuestion(nil), value.Questions...)
+	return cloned
+}
+
+func cloneSemanticPlan(value intent.SemanticPlan) intent.SemanticPlan {
+	cloned := value
+	cloned.Actions = make([]intent.SemanticAction, len(value.Actions))
+	for index, action := range value.Actions {
+		cloned.Actions[index] = cloneSemanticAction(action)
 	}
 	cloned.Questions = append([]intent.FactQuestion(nil), value.Questions...)
 	return cloned
+}
+
+func cloneSemanticAction(action intent.SemanticAction) intent.SemanticAction {
+	switch typed := action.(type) {
+	case intent.MoveAction:
+		return typed
+	case *intent.MoveAction:
+		return cloneSemanticActionPointer(typed)
+	case intent.InspectAction:
+		return typed
+	case *intent.InspectAction:
+		return cloneSemanticActionPointer(typed)
+	case intent.SearchAction:
+		return typed
+	case *intent.SearchAction:
+		return cloneSemanticActionPointer(typed)
+	case intent.TakeAction:
+		return typed
+	case *intent.TakeAction:
+		return cloneSemanticActionPointer(typed)
+	case intent.UseAction:
+		return typed
+	case *intent.UseAction:
+		return cloneSemanticActionPointer(typed)
+	case intent.ToggleAction:
+		return typed
+	case *intent.ToggleAction:
+		return cloneSemanticActionPointer(typed)
+	case intent.WaitAction:
+		return typed
+	case *intent.WaitAction:
+		return cloneSemanticActionPointer(typed)
+	case intent.TalkAction:
+		return typed
+	case *intent.TalkAction:
+		return cloneSemanticActionPointer(typed)
+	case intent.ListenAction:
+		return typed
+	case *intent.ListenAction:
+		return cloneSemanticActionPointer(typed)
+	case intent.ExploreAction:
+		return typed
+	case *intent.ExploreAction:
+		return cloneSemanticActionPointer(typed)
+	default:
+		return action
+	}
+}
+
+func cloneSemanticActionPointer[T any](value *T) *T {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func cloneClarificationDecision(value *intent.ClarificationDecision) *intent.ClarificationDecision {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func clonePending(value *turn.PendingSemanticAction) *turn.PendingSemanticAction {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	cloned.Candidates = make([]grounding.Candidate, len(value.Candidates))
+	for index, candidate := range value.Candidates {
+		cloned.Candidates[index] = candidate
+		cloned.Candidates[index].Aliases = append([]string(nil), candidate.Aliases...)
+	}
+	cloned.RemainingPlan = cloneSemanticPlan(value.RemainingPlan)
+	return &cloned
 }
 
 func cloneResult(value turn.Result) turn.Result {

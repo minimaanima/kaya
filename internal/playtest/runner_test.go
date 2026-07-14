@@ -27,20 +27,76 @@ type gameplayMisreadingParser struct {
 	calls int
 }
 
-func (p *gameplayMisreadingParser) ParseWithProvenance(_ context.Context, message string, _ game.PerceptionSnapshot) (intent.TurnPlan, intent.ParseProvenance, error) {
-	p.calls++
-	plan := intent.TurnPlan{
-		Actions: []intent.PlannedAction{{
-			Intent:     intent.Intent{Action: intent.ActionWait, Confidence: 0.9, RawText: message, Modifiers: []string{}},
-			TargetMode: intent.TargetSingle,
-		}},
-		Confidence: 0.9,
-		RawText:    message,
-	}
-	return plan, intent.ParseProvenance{Source: intent.ParseSourceModel, RawPlan: plan, HasRawPlan: true}, nil
+type runnerClarificationParser struct {
+	parseCalls         int
+	clarificationCalls int
 }
 
-func TestRunnerPureConversationBypassesParserWithoutChangingWorld(t *testing.T) {
+func (p *runnerClarificationParser) ParseSemanticWithProvenance(_ context.Context, message string, _ game.PerceptionSnapshot) (intent.SemanticPlan, intent.SemanticProvenance, error) {
+	p.parseCalls++
+	return intent.SemanticPlan{
+		Actions: []intent.SemanticAction{intent.SearchAction{
+			Target:   intent.Reference{Mention: "doctors", Quantity: intent.TargetOne},
+			Evidence: message,
+		}},
+		RawText: message,
+	}, intent.SemanticProvenance{Source: intent.ParseSourceModel}, nil
+}
+
+func (p *runnerClarificationParser) ParseClarification(_ context.Context, _ string, _ []intent.CandidateView) (intent.ClarificationDecision, error) {
+	p.clarificationCalls++
+	return intent.ClarificationDecision{Kind: intent.ClarificationAll}, nil
+}
+
+func TestRunnerSnapshotsPendingClarificationAcrossSteps(t *testing.T) {
+	generated := mustGeneratedRun(t, 1)
+	parser := &runnerClarificationParser{}
+	runner := NewRunner(runscenario.PrototypeDefinition(), generated, parser, fallbackComposer{})
+	storageWithLight(runner)
+
+	first, err := runner.Step(context.Background(), "search the doctors")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Before.Pending != nil || first.After.Pending == nil || len(first.After.Pending.Candidates) != 2 {
+		t.Fatalf("first pending snapshots = before:%#v after:%#v", first.Before.Pending, first.After.Pending)
+	}
+	second, err := runner.Step(context.Background(), "both")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Before.Pending == nil || second.After.Pending != nil {
+		t.Fatalf("second pending snapshots = before:%#v after:%#v", second.Before.Pending, second.After.Pending)
+	}
+	if parser.parseCalls != 1 || parser.clarificationCalls != 1 {
+		t.Fatalf("parser calls = semantic:%d clarification:%d, want 1/1", parser.parseCalls, parser.clarificationCalls)
+	}
+
+	copy := runner.Session()
+	copy.Steps[0].After.Pending.Candidates[0].Aliases[0] = "mutated"
+	again := runner.Session().Steps[0].After.Pending.Candidates[0].Aliases[0]
+	if again == "mutated" {
+		t.Fatal("runner session pending snapshot aliases stored clarification state")
+	}
+}
+
+func (p *gameplayMisreadingParser) ParseSemanticWithProvenance(_ context.Context, message string, _ game.PerceptionSnapshot) (intent.SemanticPlan, intent.SemanticProvenance, error) {
+	p.calls++
+	plan := intent.SemanticPlan{
+		Actions: []intent.SemanticAction{intent.TalkAction{
+			Target:   intent.Reference{Mention: "reception desk", Quantity: intent.TargetOne},
+			Evidence: message,
+		}},
+		RawText: message,
+	}
+	return plan, intent.SemanticProvenance{Source: intent.ParseSourceModel}, nil
+}
+
+func (p *gameplayMisreadingParser) ParseClarification(_ context.Context, _ string, _ []intent.CandidateView) (intent.ClarificationDecision, error) {
+	return intent.ClarificationDecision{Kind: intent.ClarificationNewCommand}, nil
+}
+
+func TestRunnerPureConversationUsesSemanticParserWithoutChangingWorld(t *testing.T) {
 	for _, message := range []string{
 		"hello",
 		"hello, are you still with me?",
@@ -62,8 +118,8 @@ func TestRunnerPureConversationBypassesParserWithoutChangingWorld(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			if parser.calls != 0 {
-				t.Fatalf("parser calls = %d, want 0", parser.calls)
+			if parser.calls != 1 {
+				t.Fatalf("parser calls = %d, want 1 semantic parse", parser.calls)
 			}
 			if step.Turn.DurationSeconds != 0 || step.After.Time != step.Before.Time {
 				t.Fatalf("conversation advanced time: duration=%d before=%d after=%d", step.Turn.DurationSeconds, step.Before.Time, step.After.Time)

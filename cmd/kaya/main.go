@@ -118,17 +118,21 @@ func runPlay(args []string) error {
 
 	parser := intent.NewParser(client)
 	state := run.State
-	executor := turn.NewExecutor(state)
 	composer := response.NewComposer(client)
-	scanner := bufio.NewScanner(os.Stdin)
 
 	printRunDebug(os.Stdout, run)
 	fmt.Println("Connection established.")
 	fmt.Println("Kaya: I can read you. I am in reception. The ceiling is cracked, but I can move.")
 	fmt.Println("Type naturally. Use 'quit' or 'exit' to stop.")
+	return runPlayConsole(context.Background(), os.Stdin, os.Stdout, state, parser, composer, options.ParseLog || parseLogEnabled())
+}
+
+func runPlayConsole(ctx context.Context, input io.Reader, output io.Writer, state *world.State, parser session.SemanticParser, composer session.Composer, parseLog bool) error {
+	runtime := session.New(state, parser, composer)
+	scanner := bufio.NewScanner(input)
 
 	for {
-		fmt.Print("> ")
+		fmt.Fprint(output, "> ")
 		if !scanner.Scan() {
 			break
 		}
@@ -138,29 +142,29 @@ func runPlay(args []string) error {
 			continue
 		}
 		if message == "quit" || message == "exit" {
-			fmt.Println("Connection closed.")
+			fmt.Fprintln(output, "Connection closed.")
 			return nil
 		}
 
-		processed, err := processPlayerTurn(context.Background(), message, state, parser, executor, composer)
+		processed, err := runtime.ProcessTurn(ctx, message)
 		if err != nil {
-			fmt.Println("Kaya: The signal broke up. I did not understand that.")
-			fmt.Println("debug:", err)
+			fmt.Fprintln(output, "Kaya: The signal broke up. I did not understand that.")
+			fmt.Fprintln(output, "debug:", err)
 			continue
 		}
-		if options.ParseLog || parseLogEnabled() {
-			fmt.Println(formatParseLog(processed.Plan))
+		if parseLog {
+			fmt.Fprintln(output, formatParseLog(processed))
 		}
 		if elapsed := resultDuration(processed.Result); elapsed > 0 {
-			fmt.Printf("[time +%ds]\n", elapsed)
+			fmt.Fprintf(output, "[time +%ds]\n", elapsed)
 		}
-		fmt.Println("Kaya:", processed.Response.Text)
+		fmt.Fprintln(output, "Kaya:", processed.Response.Text)
 		if processed.Response.UsedFallback && debugOutputEnabled() {
-			fmt.Println("debug:", processed.Response.FallbackReason)
+			fmt.Fprintln(output, "debug:", processed.Response.FallbackReason)
 		}
 		if state.CurrentRoomID == scenario.RoomStairwell {
-			fmt.Println("Kaya: I am in the stairwell. This part is clear.")
-			fmt.Println("Prototype objective complete.")
+			fmt.Fprintln(output, "Kaya: I am in the stairwell. This part is clear.")
+			fmt.Fprintln(output, "Prototype objective complete.")
 			return nil
 		}
 	}
@@ -259,7 +263,7 @@ func newPrototypePlaytestExecutor(options playOptions) (playtestExecutor, error)
 		return nil, fmt.Errorf("generate playtest run: %w", err)
 	}
 
-	var parser session.Parser = intent.NewParser(nil)
+	var parser session.SemanticParser = intent.NewParser(nil)
 	var composer session.Composer = response.NewComposer(nil)
 	if envBool("KAYA_PLAYTEST_OLLAMA") {
 		model := envOrDefault("KAYA_OLLAMA_MODEL", defaultOllamaModel)
@@ -897,9 +901,11 @@ func envBool(name string) bool {
 	}
 }
 
-func formatParseLog(plan intent.TurnPlan) string {
+func formatParseLog(processed session.ProcessedTurn) string {
+	plan := processed.SemanticPlan
+	provenance := processed.SemanticProvenance
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("parse: confidence=%.2f", plan.Confidence))
+	b.WriteString(fmt.Sprintf("parse: source=%s", provenance.Source))
 	if plan.NeedsClarification {
 		b.WriteString(" clarification=true")
 		if strings.TrimSpace(plan.ClarificationQuestion) != "" {
@@ -909,30 +915,89 @@ func formatParseLog(plan intent.TurnPlan) string {
 	}
 	if len(plan.Actions) == 0 {
 		b.WriteString(" actions=0")
-		return b.String()
-	}
-	b.WriteString(fmt.Sprintf(" actions=%d", len(plan.Actions)))
-	for i, planned := range plan.Actions {
-		in := planned.Intent
-		b.WriteString(fmt.Sprintf(" | %d:%s mode=%s", i+1, in.Action, planned.TargetMode))
-		if strings.TrimSpace(in.Target) != "" {
-			b.WriteString(" target=")
-			b.WriteString(in.Target)
+	} else {
+		b.WriteString(fmt.Sprintf(" actions=%d", len(plan.Actions)))
+		for i, action := range plan.Actions {
+			b.WriteString(fmt.Sprintf(" | %d:%s%s evidence=%s", i+1, action.ActionKind(), formatSemanticActionFields(action), strconvQuote(action.SourceEvidence())))
 		}
-		if strings.TrimSpace(in.Item) != "" {
-			b.WriteString(" item=")
-			b.WriteString(in.Item)
-		}
-		if strings.TrimSpace(in.Direction) != "" {
-			b.WriteString(" direction=")
-			b.WriteString(in.Direction)
-		}
-		b.WriteString(fmt.Sprintf(" confidence=%.2f", in.Confidence))
 	}
 	if len(plan.Questions) > 0 {
 		b.WriteString(fmt.Sprintf(" questions=%d", len(plan.Questions)))
 	}
+	for i, outcome := range processed.Result.Outcomes {
+		b.WriteString(fmt.Sprintf(" | grounded %d: action=%s grounded_object=%s grounded_ids=[%s]", i+1, outcome.Intent.Action, strconvQuote(string(outcome.TargetObjectID)), joinObjectIDs(outcome.Result.TargetObjectIDs)))
+	}
+	if processed.Pending != nil {
+		ids := make([]string, len(processed.Pending.Candidates))
+		for i, candidate := range processed.Pending.Candidates {
+			ids[i] = candidate.ID
+		}
+		b.WriteString(fmt.Sprintf(" | pending: action=%d role=%s candidates=[%s]", processed.Pending.ActionIndex, processed.Pending.Role, strings.Join(ids, ",")))
+	}
+	appendParseJSON(&b, "raw_dto", provenance.RawPlan, provenance.HasRawPlan)
+	appendParseJSON(&b, "initial_raw_dto", provenance.InitialRawPlan, provenance.HasInitialRawPlan)
+	appendParseJSON(&b, "validation_errors", provenance.ValidationErrors, len(provenance.ValidationErrors) > 0)
+	appendParseJSON(&b, "initial_validation_errors", provenance.InitialValidationErrors, len(provenance.InitialValidationErrors) > 0)
+	if provenance.RepairReason != nil {
+		b.WriteString(" | repair_reason=")
+		b.WriteString(strconvQuote(provenance.RepairReason.Error()))
+	}
+	if provenance.FallbackError != nil {
+		b.WriteString(" | fallback_error=")
+		b.WriteString(strconvQuote(provenance.FallbackError.Error()))
+	}
 	return b.String()
+}
+
+func appendParseJSON(b *strings.Builder, name string, value any, present bool) {
+	if !present {
+		return
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return
+	}
+	b.WriteString(" | ")
+	b.WriteString(name)
+	b.WriteByte('=')
+	b.Write(encoded)
+}
+
+func formatSemanticActionFields(action intent.SemanticAction) string {
+	switch typed := action.(type) {
+	case intent.MoveAction:
+		return " direction=" + strconvQuote(typed.Direction)
+	case intent.InspectAction:
+		return formatSemanticReference(typed.Target)
+	case intent.SearchAction:
+		return formatSemanticReference(typed.Target)
+	case intent.TakeAction:
+		return formatSemanticReference(typed.Target)
+	case intent.UseAction:
+		return " item_" + strings.TrimPrefix(formatSemanticReference(typed.Item), " ") + formatSemanticReference(typed.Target)
+	case intent.ToggleAction:
+		return " item_" + strings.TrimPrefix(formatSemanticReference(typed.Item), " ") + " state=" + strconvQuote(typed.State)
+	case intent.TalkAction:
+		return formatSemanticReference(typed.Target)
+	case intent.ListenAction:
+		return formatSemanticReference(typed.Target)
+	case intent.ExploreAction:
+		return formatSemanticReference(typed.Target)
+	default:
+		return ""
+	}
+}
+
+func formatSemanticReference(reference intent.Reference) string {
+	return " mention=" + strconvQuote(reference.Mention) + " quantity=" + strconvQuote(string(reference.Quantity))
+}
+
+func joinObjectIDs(ids []game.ObjectID) string {
+	values := make([]string, len(ids))
+	for i, id := range ids {
+		values[i] = string(id)
+	}
+	return strings.Join(values, ",")
 }
 
 func strconvQuote(value string) string {

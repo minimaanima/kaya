@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"kaya/internal/game"
+	"kaya/internal/intent"
 	"kaya/internal/rungen"
 	"kaya/internal/runscenario"
 	"kaya/internal/scenario"
@@ -37,9 +38,9 @@ func TestAdversarialPrototypeSessions(t *testing.T) {
 			name:         "take-before-discovery",
 			placements:   prototypePlacementsFor(scenario.ObjectReceptionDesk, scenario.ObjectBodyCabinet),
 			messages:     []string{"take the flashlight"},
-			wantOutcomes: []string{"item_not_found"},
+			wantOutcomes: []string{"unresolved_reference"},
 			wantStates: []adversarialState{{
-				time: 2, room: scenario.RoomReception, door: world.DoorLocked,
+				time: 0, room: scenario.RoomReception, door: world.DoorLocked,
 			}},
 		},
 		{
@@ -73,15 +74,15 @@ func TestAdversarialPrototypeSessions(t *testing.T) {
 			placements:   prototypePlacementsFor(scenario.ObjectReceptionFloor, scenario.ObjectStorageCabinet),
 			prepare:      storageWithLight,
 			messages:     []string{"search the doctors", "both"},
-			wantOutcomes: []string{"target_ambiguous", "searched_empty"},
+			wantOutcomes: []string{"clarification", "searched_empty"},
 			wantStates: []adversarialState{
 				{time: 0, room: scenario.RoomStorage, inventory: []game.ItemID{scenario.ItemFlashlight}, discovered: []game.ItemID{scenario.ItemFlashlight}, light: true, door: world.DoorLocked},
 				{time: 60, room: scenario.RoomStorage, inventory: []game.ItemID{scenario.ItemFlashlight}, discovered: []game.ItemID{scenario.ItemFlashlight}, light: true, door: world.DoorLocked},
 			},
 			check: func(t *testing.T, steps []Step) {
 				t.Helper()
-				if got := steps[1].Turn.Plan.Actions[0].Intent.Target; got != "both" {
-					t.Fatalf("remembered follow-up target = %q, want both", got)
+				if steps[0].Turn.Pending == nil || steps[1].Turn.ClarificationDecision == nil || steps[1].Turn.ClarificationDecision.Kind != intent.ClarificationAll {
+					t.Fatalf("clarification evidence was not retained: first=%#v second=%#v", steps[0].Turn.Pending, steps[1].Turn.ClarificationDecision)
 				}
 				if len(steps[1].Turn.Result.Outcomes) != 2 {
 					t.Fatalf("remembered follow-up outcomes = %#v, want both doctors searched", steps[1].Turn.Result.Outcomes)
@@ -97,14 +98,14 @@ func TestAdversarialPrototypeSessions(t *testing.T) {
 			name:         "failed-first-action-stops-compound",
 			placements:   prototypePlacementsFor(scenario.ObjectCollapsedChair, scenario.ObjectStorageCabinet),
 			messages:     []string{"take the key and go east"},
-			wantOutcomes: []string{"item_not_found"},
+			wantOutcomes: []string{"unresolved_reference"},
 			wantStates: []adversarialState{{
-				time: 2, room: scenario.RoomReception, door: world.DoorLocked,
+				time: 0, room: scenario.RoomReception, door: world.DoorLocked,
 			}},
 			check: func(t *testing.T, steps []Step) {
 				t.Helper()
-				if len(steps[0].Turn.Plan.Actions) != 2 || len(steps[0].Turn.Result.Outcomes) != 1 {
-					t.Fatalf("compound failure executed unexpected actions: plan=%#v outcomes=%#v", steps[0].Turn.Plan.Actions, steps[0].Turn.Result.Outcomes)
+				if len(steps[0].Turn.SemanticPlan.Actions) != 2 || len(steps[0].Turn.Result.Outcomes) != 1 {
+					t.Fatalf("compound failure executed unexpected actions: plan=%#v outcomes=%#v", steps[0].Turn.SemanticPlan.Actions, steps[0].Turn.Result.Outcomes)
 				}
 			},
 		},

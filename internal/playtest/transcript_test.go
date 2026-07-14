@@ -39,15 +39,20 @@ func TestRenderMarkdownIncludesReproductionEvidence(t *testing.T) {
 				Before:    before,
 				Processed: true,
 				Turn: session.ProcessedTurn{
-					Plan: intent.TurnPlan{Actions: []intent.PlannedAction{{
-						Intent:     intent.Intent{Action: intent.ActionInspect, RawText: "look around"},
-						TargetMode: intent.TargetSingle,
-					}}, Confidence: 0.8},
-					Provenance: intent.ParseProvenance{
-						Source:        intent.ParseSourceRepair,
-						RawPlan:       intent.TurnPlan{Actions: []intent.PlannedAction{{Intent: intent.Intent{Action: intent.ActionTalk}, TargetMode: intent.TargetSingle}}},
-						HasRawPlan:    true,
-						Canonicalized: true,
+					SemanticPlan: intent.SemanticPlan{Actions: []intent.SemanticAction{
+						intent.InspectAction{Evidence: "look around"},
+					}, RawText: "look around"},
+					SemanticProvenance: intent.SemanticProvenance{
+						Source:     intent.ParseSourceRepair,
+						RawPlan:    intent.ModelTurnPlan{Actions: []intent.ModelAction{{Kind: "inspect", Evidence: "look around", Quantity: intent.TargetOne}}, RawText: "look around"},
+						HasRawPlan: true,
+						InitialRawPlan: intent.ModelTurnPlan{Actions: []intent.ModelAction{{
+							Kind: "talk", TargetMention: "Kaya", Evidence: "look around", Quantity: intent.TargetOne,
+						}}, RawText: "look around"},
+						HasInitialRawPlan: true,
+						InitialValidationErrors: []intent.ValidationError{{
+							Action: 0, Field: "evidence", Code: "invalid_action", Message: "initial decode failed",
+						}},
 						RepairReason:  errors.New("initial decode failed"),
 						FallbackError: errors.New("fallback was not needed"),
 					},
@@ -99,10 +104,12 @@ func TestRenderMarkdownIncludesReproductionEvidence(t *testing.T) {
 		"Player:\n",
 		"Processed: `true`",
 		"Processed: `false`",
-		"Raw actions:",
-		"Resolved actions:",
+		"Initial raw model DTO:",
+		"Terminal raw model DTO:",
+		"Typed semantic actions:",
 		"Parse source:",
 		"Generator provenance: `used`",
+		"Structured validation errors:",
 		"Provenance errors:",
 		"Outcomes:",
 		"Events:",
@@ -140,6 +147,54 @@ func TestRenderMarkdownIncludesReproductionEvidence(t *testing.T) {
 	}
 }
 
+func TestRenderMarkdownReproducesSemanticRawDTOAndValidationErrors(t *testing.T) {
+	step := Step{
+		Number:    1,
+		Player:    "search the doctors",
+		Processed: true,
+		Turn: session.ProcessedTurn{
+			SemanticPlan: intent.SemanticPlan{
+				Actions: []intent.SemanticAction{intent.SearchAction{
+					Target:   intent.Reference{Mention: "the doctors", Quantity: intent.TargetOne},
+					Evidence: "search the doctors",
+				}},
+				RawText: "search the doctors",
+			},
+			SemanticProvenance: intent.SemanticProvenance{
+				Source: intent.ParseSourceRepair,
+				RawPlan: intent.ModelTurnPlan{Actions: []intent.ModelAction{{
+					Kind: "search", TargetMention: "the doctors", Evidence: "search the doctors", Quantity: intent.TargetOne,
+				}}, RawText: "search the doctors"},
+				HasRawPlan: true,
+				InitialRawPlan: intent.ModelTurnPlan{Actions: []intent.ModelAction{{
+					Kind: "search", TargetMention: "the doctors", Direction: "north", Evidence: "search the doctors", Quantity: intent.TargetOne,
+				}}, RawText: "search the doctors"},
+				HasInitialRawPlan: true,
+				InitialValidationErrors: []intent.ValidationError{{
+					Action: 0, Field: "direction", Code: "forbidden_slot", Message: "direction is forbidden",
+				}},
+				RepairReason: errors.New("compile semantic plan"),
+			},
+		},
+	}
+
+	got := RenderMarkdown(Session{Steps: []Step{step}})
+	for _, want := range []string{
+		"Initial raw model DTO:",
+		"Terminal raw model DTO:",
+		`"kind": "search"`,
+		`"targetMention": "the doctors"`,
+		"Structured validation errors:",
+		"action=0 field=\"direction\" code=\"forbidden_slot\" message=\"direction is forbidden\"",
+		"Typed semantic actions:",
+		"action 1: kind=\"search\" target_mention=\"the doctors\" quantity=\"one\" evidence=\"search the doctors\"",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestRenderMarkdownMarksUnprocessedTurnEvidenceUnavailable(t *testing.T) {
 	before := transcriptSnapshot()
 	after := transcriptSnapshot()
@@ -157,8 +212,9 @@ func TestRenderMarkdownMarksUnprocessedTurnEvidenceUnavailable(t *testing.T) {
 	got := RenderMarkdown(Session{Steps: []Step{step}})
 	for _, expected := range []string{
 		"Processed: `false`",
-		"Raw actions:\n- unavailable",
-		"Resolved actions:\n- unavailable",
+		"Initial raw model DTO:\n- unavailable",
+		"Terminal raw model DTO:\n- unavailable",
+		"Typed semantic actions:\n- unavailable",
 		"Result evidence:\n- unavailable",
 		"Response evidence:\n- unavailable",
 		"Before:",
@@ -214,31 +270,20 @@ func TestRenderMarkdownPreservesCompleteTurnEvidenceAndSemanticOrder(t *testing.
 		Processed: true,
 		Turn: session.ProcessedTurn{
 			DurationSeconds: 17,
-			Plan: intent.TurnPlan{
-				Actions: []intent.PlannedAction{{
-					Intent: intent.Intent{
-						Action:                intent.ActionMove,
-						Target:                "target ``` text",
-						Item:                  "key",
-						Direction:             "north",
-						Modifiers:             []string{"then", "quietly"},
-						Confidence:            0.75,
-						RawText:               "intent raw ``` text",
-						NeedsClarification:    true,
-						ClarificationQuestion: "intent question ``` text",
-					},
-					TargetMode: intent.TargetAll,
+			SemanticPlan: intent.SemanticPlan{
+				Actions: []intent.SemanticAction{intent.MoveAction{
+					Direction: "north",
+					Evidence:  "intent raw ``` text",
 				}},
 				Questions:             []intent.FactQuestion{{Kind: game.FactLifeStatus, Target: "doctors", TargetMode: intent.TargetAll}},
-				Confidence:            0.9,
 				NeedsClarification:    true,
-				ClarificationQuestion: "turn question ``` text",
+				ClarificationQuestion: "intent question ``` text",
 				RawText:               "turn raw ``` text",
 			},
-			Provenance: intent.ParseProvenance{
+			SemanticProvenance: intent.SemanticProvenance{
 				Source: intent.ParseSourceModel,
-				RawPlan: intent.TurnPlan{
-					Actions: []intent.PlannedAction{{Intent: intent.Intent{Action: intent.ActionTalk, RawText: "raw action text"}, TargetMode: intent.TargetSingle}},
+				RawPlan: intent.ModelTurnPlan{
+					Actions: []intent.ModelAction{{Kind: "talk", TargetMention: "Kaya", Evidence: "raw action text", Quantity: intent.TargetOne}},
 					RawText: "raw plan text",
 				},
 				HasRawPlan: true,
