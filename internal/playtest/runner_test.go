@@ -23,6 +23,39 @@ func (debugComposer) Compose(_ context.Context, _ turn.FactBundle) response.Resp
 	return response.Response{Text: "debug: raw plan"}
 }
 
+type countingRunnerComposer struct {
+	calls  int
+	ctx    context.Context
+	bundle turn.FactBundle
+}
+
+func (c *countingRunnerComposer) Compose(ctx context.Context, bundle turn.FactBundle) response.Response {
+	c.calls++
+	c.ctx = ctx
+	c.bundle = bundle
+	return response.NewComposer(nil).Compose(ctx, bundle)
+}
+
+func TestRunnerPreservesLegacyTakeTimingAndComposesOnce(t *testing.T) {
+	generated := mustGeneratedRun(t, 1)
+	composer := &countingRunnerComposer{}
+	runner := NewRunner(runscenario.PrototypeDefinition(), generated, DeterministicParser{}, composer)
+
+	step, err := runner.Step(context.Background(), "take the flashlight")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.After.Time != 2 || step.Turn.DurationSeconds != 2 || len(step.Turn.Result.Outcomes) != 1 || step.Turn.Result.Outcomes[0].Result.Outcome != "item_not_found" {
+		t.Fatalf("runner legacy failure = %#v", step)
+	}
+	if composer.calls != 1 {
+		t.Fatalf("composer calls = %d, want 1", composer.calls)
+	}
+	if len(composer.bundle.Outcomes) != 1 || composer.bundle.Outcomes[0].Result.Outcome != "item_not_found" {
+		t.Fatalf("composed outcomes = %#v, want item_not_found", composer.bundle.Outcomes)
+	}
+}
+
 type gameplayMisreadingParser struct {
 	calls int
 }

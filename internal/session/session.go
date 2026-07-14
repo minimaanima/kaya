@@ -117,6 +117,7 @@ func (s *Session) finishSemanticTurn(
 	result turn.Result,
 	decision *intent.ClarificationDecision,
 ) ProcessedTurn {
+	result = applyLegacySemanticCompatibility(s.state, result)
 	responseCtx, cancelResponse := context.WithTimeout(ctx, 60*time.Second)
 	composed := s.composer.Compose(responseCtx, result.FactBundle(message))
 	cancelResponse()
@@ -129,6 +130,26 @@ func (s *Session) finishSemanticTurn(
 		Response:              composed,
 		DurationSeconds:       ResultDuration(result),
 	}
+}
+
+func applyLegacySemanticCompatibility(state *world.State, result turn.Result) turn.Result {
+	if state == nil || len(result.Outcomes) != 1 {
+		return result
+	}
+	outcome := &result.Outcomes[0]
+	if outcome.Intent.Action != intent.ActionTakeItem || outcome.Result.Outcome != "unresolved_reference" || outcome.Result.DurationSeconds != 0 {
+		return result
+	}
+	outcome.Result.Status = game.ActionFailed
+	outcome.Result.StartedAtSeconds = state.NowSeconds
+	outcome.Result.DurationSeconds = 2
+	outcome.Result.Outcome = "item_not_found"
+	outcome.Result.VisibleFacts = []game.Fact{{
+		ID: "item_not_found", Kind: game.FactFailure, Subject: "action", Value: "item_not_found", Text: "I cannot find that item here.", Required: true,
+	}}
+	outcome.Result.Events = state.Advance(2)
+	result.StopReason = "item_not_found"
+	return result
 }
 
 func (s *Session) rememberPending(plan intent.SemanticPlan, pending *turn.PendingSemanticAction) {

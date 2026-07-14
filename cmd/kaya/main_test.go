@@ -115,6 +115,39 @@ func (f fakeComposer) Compose(context.Context, turn.FactBundle) response.Respons
 	return response.Response{Text: f.text}
 }
 
+type recordingSemanticComposer struct {
+	calls  int
+	ctx    context.Context
+	bundle turn.FactBundle
+}
+
+func (c *recordingSemanticComposer) Compose(ctx context.Context, bundle turn.FactBundle) response.Response {
+	c.calls++
+	c.ctx = ctx
+	c.bundle = bundle
+	return response.NewComposer(nil).Compose(ctx, bundle)
+}
+
+func TestSemanticConsolePreservesLegacyTakeTimingAndComposesOnce(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	composer := &recordingSemanticComposer{}
+	var output bytes.Buffer
+
+	err := runPlayConsole(context.Background(), strings.NewReader("take the flashlight\nquit\n"), &output, state, playtest.DeterministicParser{}, composer, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.NowSeconds != 2 || !strings.Contains(output.String(), "[time +2s]") {
+		t.Fatalf("console timing = state:%d output:%q, want legacy two-second failure", state.NowSeconds, output.String())
+	}
+	if composer.calls != 1 {
+		t.Fatalf("composer calls = %d, want 1", composer.calls)
+	}
+	if len(composer.bundle.Outcomes) != 1 || composer.bundle.Outcomes[0].Result.Outcome != "item_not_found" {
+		t.Fatalf("composed outcomes = %#v, want item_not_found", composer.bundle.Outcomes)
+	}
+}
+
 var _ turnParser = fakeTurnParser{}
 var _ responseComposer = fakeComposer{}
 

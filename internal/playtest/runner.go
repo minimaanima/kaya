@@ -20,7 +20,6 @@ type Runner struct {
 	run                rungen.GeneratedRun
 	runtime            *session.Session
 	parser             *trackingParser
-	composer           session.Composer
 	pending            *turn.PendingSemanticAction
 	session            Session
 	objectiveCompleted bool
@@ -77,7 +76,6 @@ func NewRunner(def rungen.Definition, run rungen.GeneratedRun, parser session.Se
 		definition: def,
 		run:        run,
 		parser:     tracked,
-		composer:   composer,
 		session: Session{
 			ScenarioID:       run.ScenarioID,
 			ScenarioVersion:  run.ScenarioVersion,
@@ -121,7 +119,6 @@ func (r *Runner) Step(ctx context.Context, message string) (Step, error) {
 		}
 		return step, fmt.Errorf("process turn: %w", err)
 	}
-	r.restoreLegacyTakeFailure(ctx, message, &processed)
 	step.Processed = true
 	step.Turn = cloneProcessedTurn(processed)
 	r.pending = clonePending(processed.Pending)
@@ -145,25 +142,6 @@ func (r *Runner) Step(ctx context.Context, message string) (Step, error) {
 		return step, fmt.Errorf("playtest invariant violation: %s", violationDetails(step.Violations))
 	}
 	return step, nil
-}
-
-func (r *Runner) restoreLegacyTakeFailure(ctx context.Context, message string, processed *session.ProcessedTurn) {
-	if processed == nil || len(processed.Result.Outcomes) != 1 {
-		return
-	}
-	outcome := &processed.Result.Outcomes[0]
-	if outcome.Intent.Action != intent.ActionTakeItem || outcome.Result.Outcome != "unresolved_reference" || outcome.Result.DurationSeconds != 0 {
-		return
-	}
-	outcome.Result.Status = game.ActionFailed
-	outcome.Result.StartedAtSeconds = r.run.State.NowSeconds
-	outcome.Result.DurationSeconds = 2
-	outcome.Result.Outcome = "item_not_found"
-	outcome.Result.VisibleFacts = []game.Fact{{ID: "item_not_found", Kind: game.FactFailure, Subject: "action", Value: "item_not_found", Text: "I cannot find that item here.", Required: true}}
-	outcome.Result.Events = r.run.State.Advance(2)
-	processed.Result.StopReason = "item_not_found"
-	processed.DurationSeconds = 2
-	processed.Response = r.composer.Compose(ctx, processed.Result.FactBundle(message))
 }
 
 func deterministicSemanticPlan(message string) intent.SemanticPlan {

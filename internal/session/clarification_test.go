@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"kaya/internal/game"
 	"kaya/internal/grounding"
@@ -143,6 +144,51 @@ type semanticSessionComposer struct{}
 
 func (semanticSessionComposer) Compose(ctx context.Context, bundle turn.FactBundle) response.Response {
 	return response.NewComposer(nil).Compose(ctx, bundle)
+}
+
+type deadlineSemanticComposer struct {
+	calls  int
+	ctx    context.Context
+	bundle turn.FactBundle
+}
+
+func (c *deadlineSemanticComposer) Compose(ctx context.Context, bundle turn.FactBundle) response.Response {
+	c.calls++
+	c.ctx = ctx
+	c.bundle = bundle
+	return response.NewComposer(nil).Compose(ctx, bundle)
+}
+
+func TestSessionAppliesLegacyTakeTimingBeforeSingleDeadlineComposition(t *testing.T) {
+	state := scenario.NewPrototypeWorld()
+	parser := &scriptedSessionParser{plans: map[string]intent.SemanticPlan{
+		"take the flashlight": {Actions: []intent.SemanticAction{intent.TakeAction{
+			Target: intent.Reference{Mention: "flashlight", Quantity: intent.TargetOne}, Evidence: "take the flashlight",
+		}}},
+	}}
+	composer := &deadlineSemanticComposer{}
+	started := time.Now()
+
+	got, err := New(state, parser, composer).ProcessTurn(context.Background(), "take the flashlight")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.NowSeconds != 2 || got.DurationSeconds != 2 || len(got.Result.Outcomes) != 1 || got.Result.Outcomes[0].Result.Outcome != "item_not_found" {
+		t.Fatalf("legacy timing result = %#v state time=%d", got.Result, state.NowSeconds)
+	}
+	if composer.calls != 1 {
+		t.Fatalf("composer calls = %d, want 1", composer.calls)
+	}
+	if len(composer.bundle.Outcomes) != 1 || composer.bundle.Outcomes[0].Result.Outcome != "item_not_found" {
+		t.Fatalf("composer saw outcomes = %#v, want corrected result", composer.bundle.Outcomes)
+	}
+	deadline, ok := composer.ctx.Deadline()
+	if !ok || deadline.Sub(started) < 59*time.Second || deadline.Sub(started) > 61*time.Second {
+		t.Fatalf("compose deadline = %v, %t; want approximately 60 seconds", deadline, ok)
+	}
+	if composer.ctx.Err() != context.Canceled {
+		t.Fatalf("compose context error after return = %v, want canceled", composer.ctx.Err())
+	}
 }
 
 func TestSessionResumesCandidateBoundSelections(t *testing.T) {
