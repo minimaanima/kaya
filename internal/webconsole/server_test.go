@@ -36,6 +36,61 @@ func TestLoginIssuesSecureCookie(t *testing.T) {
 	}
 }
 
+func TestUnauthenticatedRootProvidesPasswordLoginPage(t *testing.T) {
+	response := httptest.NewRecorder()
+	newTestServer(t).Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("root status = %d, want %d", response.Code, http.StatusOK)
+	}
+	for _, want := range []string{`<title>Kaya Remote Console</title>`, `id="login-form"`, `action="/login"`, `name="password"`} {
+		if !strings.Contains(response.Body.String(), want) {
+			t.Fatalf("login page missing %q", want)
+		}
+	}
+}
+
+func TestUnauthenticatedRootDoesNotStartGame(t *testing.T) {
+	server, games := newFakeServer(t)
+	response := httptest.NewRecorder()
+	server.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("root status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if len(games.runtimes) != 0 {
+		t.Fatalf("games created = %d, want none before login", len(games.runtimes))
+	}
+}
+
+func TestTerminalPageProvidesMobileConsoleControls(t *testing.T) {
+	server, _ := newFakeServer(t)
+	browser := login(t, server.Handler())
+
+	response := browser.request(t, server.Handler(), http.MethodGet, "/", "", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("root status = %d, want %d", response.Code, http.StatusOK)
+	}
+	for _, want := range []string{`name="viewport"`, `Kaya Remote Console`, `id="transcript"`, `id="message"`, `id="send"`, `New Run`, `Logout`} {
+		if !strings.Contains(response.Body.String(), want) {
+			t.Fatalf("page missing %q", want)
+		}
+	}
+}
+
+func TestTerminalPageUsesSafeTranscriptRendering(t *testing.T) {
+	server, _ := newFakeServer(t)
+	browser := login(t, server.Handler())
+
+	response := browser.request(t, server.Handler(), http.MethodGet, "/", "", nil)
+	if !strings.Contains(response.Body.String(), "textContent") {
+		t.Fatal("terminal page must render transcript text safely")
+	}
+	if strings.Contains(response.Body.String(), "innerHTML") {
+		t.Fatal("terminal page must not use unsafe transcript insertion")
+	}
+}
+
 func TestSessionStartsWithConnectionAndGreeting(t *testing.T) {
 	server, _ := newFakeServer(t)
 	browser := login(t, server.Handler())

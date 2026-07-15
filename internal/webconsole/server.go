@@ -104,6 +104,7 @@ func New(config Config) (*Server, error) {
 		sessions:     make(map[string]*webSession),
 	}
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", server.handleRoot)
 	mux.HandleFunc("POST /login", server.handleLogin)
 	mux.HandleFunc("GET /api/session", server.requireSession(server.handleSession))
 	mux.HandleFunc("POST /api/turn", server.requireSession(server.handleTurn))
@@ -119,6 +120,14 @@ func New(config Config) (*Server, error) {
 // Handler returns the web console HTTP handler.
 func (s *Server) Handler() http.Handler {
 	return s.handler
+}
+
+func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.activeSession(r); ok {
+		writeHTML(w, terminalDocument)
+		return
+	}
+	writeHTML(w, loginDocument)
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -349,6 +358,12 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+func writeHTML(w http.ResponseWriter, document string) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = io.WriteString(w, document)
 }
 
 func (s *Server) newSessionID() (string, error) {
