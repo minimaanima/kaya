@@ -198,6 +198,7 @@ const terminalDocument = `<!doctype html>
     function setPending(nextPending) {
       pending = nextPending;
       updateAvailability();
+      if (!nextPending) focusAndScroll();
     }
 
     function returnToLogin() {

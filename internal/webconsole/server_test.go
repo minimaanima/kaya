@@ -91,6 +91,16 @@ func TestTerminalPageUsesSafeTranscriptRendering(t *testing.T) {
 	}
 }
 
+func TestTerminalPageRestoresFocusAfterRequestsFinish(t *testing.T) {
+	server, _ := newFakeServer(t)
+	browser := login(t, server.Handler())
+
+	response := browser.request(t, server.Handler(), http.MethodGet, "/", "", nil)
+	if !strings.Contains(response.Body.String(), "if (!nextPending) focusAndScroll();") {
+		t.Fatal("terminal page must refocus after a request re-enables the command input")
+	}
+}
+
 func TestSessionStartsWithConnectionAndGreeting(t *testing.T) {
 	server, _ := newFakeServer(t)
 	browser := login(t, server.Handler())
@@ -237,6 +247,26 @@ func TestSessionExpiresAtTwelveHoursOfInactivity(t *testing.T) {
 	defer server.mu.Unlock()
 	if len(server.sessions) != 0 {
 		t.Fatalf("sessions = %#v, want expired session pruned", server.sessions)
+	}
+}
+
+func TestExpiredRootProvidesLoginPageWithoutStartingAnotherGame(t *testing.T) {
+	server, games := newFakeServer(t)
+	browser := login(t, server.Handler())
+	games.now = games.now.Add(12 * time.Hour)
+
+	response := browser.request(t, server.Handler(), http.MethodGet, "/", "", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("root status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if !strings.Contains(response.Body.String(), `id="login-form"`) {
+		t.Fatal("expired root must return the login page")
+	}
+	if strings.Contains(response.Body.String(), `id="transcript"`) {
+		t.Fatal("expired root must not return the terminal page")
+	}
+	if len(games.runtimes) != 1 {
+		t.Fatalf("games created = %d, want only the original game", len(games.runtimes))
 	}
 }
 
