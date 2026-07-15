@@ -1,11 +1,13 @@
 package webconsole
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -33,6 +35,26 @@ func TestLoginIssuesSecureCookie(t *testing.T) {
 	cookie := cookies[0]
 	if !cookie.Secure || !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode {
 		t.Fatalf("cookie = %#v", cookie)
+	}
+}
+
+func TestLoginAcceptsBrowserMultipartForm(t *testing.T) {
+	var body bytes.Buffer
+	form := multipart.NewWriter(&body)
+	if err := form.WriteField("password", "test-password"); err != nil {
+		t.Fatal(err)
+	}
+	if err := form.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/login", &body)
+	request.Header.Set("Content-Type", form.FormDataContentType())
+	response := httptest.NewRecorder()
+	newTestServer(t).Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("multipart login status = %d, want %d", response.Code, http.StatusNoContent)
 	}
 }
 

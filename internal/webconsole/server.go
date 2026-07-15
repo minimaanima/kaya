@@ -24,6 +24,7 @@ import (
 const (
 	sessionCookieName      = "kaya_web_session"
 	sessionInactivityLimit = 12 * time.Hour
+	maxLoginRequestBytes   = 4096
 	maxTurnRequestBytes    = 4096
 	maxTurnMessageRunes    = 2000
 )
@@ -131,7 +132,18 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, maxLoginRequestBytes)
+	contentType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil {
+		http.Error(w, "invalid login request", http.StatusBadRequest)
+		return
+	}
+	if contentType == "multipart/form-data" {
+		err = r.ParseMultipartForm(maxLoginRequestBytes)
+	} else {
+		err = r.ParseForm()
+	}
+	if err != nil {
 		http.Error(w, "invalid login request", http.StatusBadRequest)
 		return
 	}
