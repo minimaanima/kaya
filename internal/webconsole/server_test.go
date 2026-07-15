@@ -122,6 +122,23 @@ func TestSessionStartsWithConnectionAndGreeting(t *testing.T) {
 	}
 }
 
+func TestSessionResponsePreventsCaching(t *testing.T) {
+	server, _ := newFakeServer(t)
+	browser := login(t, server.Handler())
+
+	response := browser.request(t, server.Handler(), http.MethodGet, "/api/session", "", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("session status = %d, want %d", response.Code, http.StatusOK)
+	}
+	if got := response.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want %q", got, "no-store")
+	}
+	state := decodeState(t, response)
+	if state.Complete || len(state.Entries) != 2 {
+		t.Fatalf("state = %#v, want incomplete initial transcript", state)
+	}
+}
+
 func TestTurnUsesOnlyTheCallersGameAndStoresTranscript(t *testing.T) {
 	server, games := newFakeServer(t)
 	clientA := login(t, server.Handler())
