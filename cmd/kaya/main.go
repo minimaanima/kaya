@@ -6,13 +6,17 @@ import (
 	cryptorand "crypto/rand"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"kaya/internal/game"
 	"kaya/internal/intent"
@@ -25,14 +29,19 @@ import (
 	"kaya/internal/scenario"
 	"kaya/internal/session"
 	"kaya/internal/turn"
+	"kaya/internal/webconsole"
 	"kaya/internal/world"
 )
 
-const defaultOllamaModel = "qwen3.5:4b"
+const (
+	defaultOllamaModel = "qwen3.5:4b"
+	defaultWebAddress  = "127.0.0.1:8080"
+	webUsage           = "usage: kaya web [--addr <host:port>]"
+)
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("usage: kaya <intent|play|playtest>")
+		fmt.Println("usage: kaya <intent|play|playtest|web>")
 		return
 	}
 
@@ -49,6 +58,11 @@ func main() {
 		}
 	case "playtest":
 		if err := runPlaytest(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	case "web":
+		if err := runWeb(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -125,6 +139,49 @@ func runPlay(args []string) error {
 	fmt.Println("Kaya: I can read you. I am in reception. The ceiling is cracked, but I can move.")
 	fmt.Println("Type naturally. Use 'quit' or 'exit' to stop.")
 	return runPlayConsole(context.Background(), os.Stdin, os.Stdout, state, parser, composer, options.ParseLog || parseLogEnabled())
+}
+
+func runWeb(args []string) error {
+	options, err := parseWebOptions(args)
+	if err != nil {
+		return err
+	}
+
+	password := os.Getenv("KAYA_WEB_PASSWORD")
+	if strings.TrimSpace(password) == "" {
+		return errors.New("KAYA_WEB_PASSWORD must be set")
+	}
+	_, port, err := net.SplitHostPort(options.Address)
+	if err != nil || port == "" {
+		return fmt.Errorf("%s: invalid --addr %q", webUsage, options.Address)
+	}
+
+	model := envOrDefault("KAYA_OLLAMA_MODEL", defaultOllamaModel)
+	baseURL := envOrDefault("KAYA_OLLAMA_URL", llm.DefaultOllamaURL)
+	client, err := llm.NewOllamaClient(model, llm.WithOllamaBaseURL(baseURL))
+	if err != nil {
+		return err
+	}
+
+	console, err := webconsole.New(webconsole.Config{
+		Password: password,
+		NewGame:  newWebGameFactory(intent.NewParser(client), response.NewComposer(client), newRunSeed),
+	})
+	if err != nil {
+		return err
+	}
+
+	httpServer := &http.Server{
+		Addr:              options.Address,
+		Handler:           console.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	fmt.Fprintf(os.Stdout, "Kaya web console listening at http://%s\n", options.Address)
+	fmt.Fprintf(os.Stdout, "Expose it with: ngrok http %s\n", port)
+	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 func runPlayConsole(ctx context.Context, input io.Reader, output io.Writer, state *world.State, parser session.SemanticParser, composer session.Composer, parseLog bool) error {
@@ -281,6 +338,54 @@ func newPrototypePlaytestExecutor(options playOptions) (playtestExecutor, error)
 type playOptions struct {
 	Seed     int64
 	ParseLog bool
+}
+
+type webOptions struct {
+	Address string
+}
+
+func parseWebOptions(args []string) (webOptions, error) {
+	flags := flag.NewFlagSet("web", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	address := flags.String("addr", defaultWebAddress, "web console address")
+	if err := flags.Parse(args); err != nil {
+		return webOptions{}, fmt.Errorf("%s: %w", webUsage, err)
+	}
+	if flags.NArg() != 0 {
+		return webOptions{}, fmt.Errorf("%s", webUsage)
+	}
+	return webOptions{Address: *address}, nil
+}
+
+func newWebGameFactory(
+	parser session.SemanticParser,
+	composer session.Composer,
+	generateSeed func() (int64, error),
+) webconsole.GameFactory {
+	return func() (webconsole.Game, error) {
+		seed, err := generateSeed()
+		if err != nil {
+			return webconsole.Game{}, fmt.Errorf("generate web run seed: %w", err)
+		}
+		generated, err := rungen.Generate(
+			rungen.RunConfig{
+				Seed:             seed,
+				GeneratorVersion: rungen.CurrentGeneratorVersion,
+			},
+			runscenario.PrototypeDefinition(),
+		)
+		if err != nil {
+			return webconsole.Game{}, fmt.Errorf("generate web run: %w", err)
+		}
+
+		state := generated.State
+		return webconsole.Game{
+			Runtime: session.New(state, parser, composer),
+			Complete: func() bool {
+				return state.CurrentRoomID == scenario.RoomStairwell
+			},
+		}, nil
+	}
 }
 
 func parsePlayOptions(args []string, generateSeed func() (int64, error)) (playOptions, error) {

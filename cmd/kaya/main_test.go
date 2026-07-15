@@ -231,6 +231,93 @@ func TestParsePlayOptionsEnablesParseLog(t *testing.T) {
 	}
 }
 
+func TestParseWebOptionsDefaultsToLoopback(t *testing.T) {
+	options, err := parseWebOptions(nil)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Address != "127.0.0.1:8080" {
+		t.Fatalf("address = %q, want loopback default", options.Address)
+	}
+}
+
+func TestParseWebOptionsUsesExplicitAddress(t *testing.T) {
+	options, err := parseWebOptions([]string{"--addr", "127.0.0.1:9090"})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Address != "127.0.0.1:9090" {
+		t.Fatalf("address = %q, want explicit address", options.Address)
+	}
+}
+
+func TestParseWebOptionsRejectsPositionals(t *testing.T) {
+	_, err := parseWebOptions([]string{"extra"})
+
+	if err == nil || !strings.Contains(err.Error(), "usage: kaya web [--addr <host:port>]") {
+		t.Fatalf("error = %v, want web usage error", err)
+	}
+}
+
+func TestParseWebOptionsRejectsInvalidFlagSyntax(t *testing.T) {
+	_, err := parseWebOptions([]string{"--unknown"})
+
+	if err == nil || !strings.Contains(err.Error(), "usage: kaya web [--addr <host:port>]") {
+		t.Fatalf("error = %v, want web usage error", err)
+	}
+}
+
+func TestNewWebGameFactoryGeneratesFreshSeedForEachGame(t *testing.T) {
+	seeds := []int64{101, 202}
+	var used []int64
+	factory := newWebGameFactory(&consoleSemanticParser{}, fakeComposer{text: "ok"}, func() (int64, error) {
+		seed := seeds[len(used)]
+		used = append(used, seed)
+		return seed, nil
+	})
+
+	first, err := factory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := factory()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !reflect.DeepEqual(used, seeds) {
+		t.Fatalf("used seeds = %v, want %v", used, seeds)
+	}
+	if first.Runtime == second.Runtime {
+		t.Fatal("games share a runtime, want one isolated runtime per factory call")
+	}
+}
+
+func TestNewWebGameFactoryReturnsSeedError(t *testing.T) {
+	want := errors.New("random source failed")
+	factory := newWebGameFactory(&consoleSemanticParser{}, fakeComposer{text: "ok"}, func() (int64, error) {
+		return 0, want
+	})
+
+	_, err := factory()
+
+	if !errors.Is(err, want) {
+		t.Fatalf("error = %v, want %v", err, want)
+	}
+}
+
+func TestRunWebRejectsMissingPassword(t *testing.T) {
+	t.Setenv("KAYA_WEB_PASSWORD", "")
+
+	err := runWeb(nil)
+
+	if err == nil || !strings.Contains(err.Error(), "KAYA_WEB_PASSWORD") {
+		t.Fatalf("error = %v, want missing password error", err)
+	}
+}
+
 func TestParsePlaytestOptionsUsesExistingPlayOptionBehavior(t *testing.T) {
 	options, err := parsePlaytestOptions([]string{"--seed", "-42", "--parse-log"}, func() (int64, error) { return 99, nil })
 
