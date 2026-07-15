@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -142,22 +143,22 @@ func runPlay(args []string) error {
 }
 
 func runWeb(args []string) error {
+	return runWebWithEnvironment(args, os.Getenv)
+}
+
+func runWebWithEnvironment(args []string, lookupEnvironment func(string) string) error {
 	options, err := parseWebOptions(args)
 	if err != nil {
 		return err
 	}
 
-	password := os.Getenv("KAYA_WEB_PASSWORD")
+	password := lookupEnvironment("KAYA_WEB_PASSWORD")
 	if strings.TrimSpace(password) == "" {
 		return errors.New("KAYA_WEB_PASSWORD must be set")
 	}
-	_, port, err := net.SplitHostPort(options.Address)
-	if err != nil || port == "" {
-		return fmt.Errorf("%s: invalid --addr %q", webUsage, options.Address)
-	}
 
-	model := envOrDefault("KAYA_OLLAMA_MODEL", defaultOllamaModel)
-	baseURL := envOrDefault("KAYA_OLLAMA_URL", llm.DefaultOllamaURL)
+	model := envOrDefaultWithEnvironment(lookupEnvironment, "KAYA_OLLAMA_MODEL", defaultOllamaModel)
+	baseURL := envOrDefaultWithEnvironment(lookupEnvironment, "KAYA_OLLAMA_URL", llm.DefaultOllamaURL)
 	client, err := llm.NewOllamaClient(model, llm.WithOllamaBaseURL(baseURL))
 	if err != nil {
 		return err
@@ -177,7 +178,7 @@ func runWeb(args []string) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	fmt.Fprintf(os.Stdout, "Kaya web console listening at http://%s\n", options.Address)
-	fmt.Fprintf(os.Stdout, "Expose it with: ngrok http %s\n", port)
+	fmt.Fprintf(os.Stdout, "Expose it with: ngrok http %s\n", options.Port)
 	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
@@ -342,6 +343,7 @@ type playOptions struct {
 
 type webOptions struct {
 	Address string
+	Port    string
 }
 
 func parseWebOptions(args []string) (webOptions, error) {
@@ -354,7 +356,18 @@ func parseWebOptions(args []string) (webOptions, error) {
 	if flags.NArg() != 0 {
 		return webOptions{}, fmt.Errorf("%s", webUsage)
 	}
-	return webOptions{Address: *address}, nil
+	_, port, err := net.SplitHostPort(*address)
+	if err != nil || port == "" {
+		return webOptions{}, fmt.Errorf("%s: invalid --addr %q", webUsage, *address)
+	}
+	portNumber, err := strconv.ParseUint(port, 10, 16)
+	if err != nil {
+		return webOptions{}, fmt.Errorf("%s: invalid --addr %q", webUsage, *address)
+	}
+	if portNumber == 0 {
+		return webOptions{}, fmt.Errorf("%s: invalid --addr %q: port must not be 0", webUsage, *address)
+	}
+	return webOptions{Address: *address, Port: port}, nil
 }
 
 func newWebGameFactory(
@@ -980,7 +993,11 @@ func formatKayaState(state kayastate.State) string {
 }
 
 func envOrDefault(name string, fallback string) string {
-	value := strings.TrimSpace(os.Getenv(name))
+	return envOrDefaultWithEnvironment(os.Getenv, name, fallback)
+}
+
+func envOrDefaultWithEnvironment(lookupEnvironment func(string) string, name string, fallback string) string {
+	value := strings.TrimSpace(lookupEnvironment(name))
 	if value == "" {
 		return fallback
 	}

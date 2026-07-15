@@ -269,6 +269,14 @@ func TestParseWebOptionsRejectsInvalidFlagSyntax(t *testing.T) {
 	}
 }
 
+func TestParseWebOptionsRejectsZeroPort(t *testing.T) {
+	_, err := parseWebOptions([]string{"--addr", "127.0.0.1:0"})
+
+	if err == nil || !strings.Contains(err.Error(), "port must not be 0") || !strings.Contains(err.Error(), webUsage) {
+		t.Fatalf("error = %v, want zero-port usage error", err)
+	}
+}
+
 func TestNewWebGameFactoryGeneratesFreshSeedForEachGame(t *testing.T) {
 	seeds := []int64{101, 202}
 	var used []int64
@@ -308,13 +316,18 @@ func TestNewWebGameFactoryReturnsSeedError(t *testing.T) {
 	}
 }
 
-func TestRunWebRejectsMissingPassword(t *testing.T) {
-	t.Setenv("KAYA_WEB_PASSWORD", "")
-
-	err := runWeb(nil)
+func TestRunWebWithEnvironmentRejectsMissingPasswordBeforeOllamaOrListening(t *testing.T) {
+	var lookedUp []string
+	err := runWebWithEnvironment(nil, func(name string) string {
+		lookedUp = append(lookedUp, name)
+		return ""
+	})
 
 	if err == nil || !strings.Contains(err.Error(), "KAYA_WEB_PASSWORD") {
 		t.Fatalf("error = %v, want missing password error", err)
+	}
+	if !reflect.DeepEqual(lookedUp, []string{"KAYA_WEB_PASSWORD"}) {
+		t.Fatalf("environment lookups = %v, want password lookup before Ollama or listening", lookedUp)
 	}
 }
 
