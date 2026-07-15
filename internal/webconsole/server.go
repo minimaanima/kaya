@@ -227,7 +227,7 @@ func (s *Server) handleTurn(w http.ResponseWriter, r *http.Request, active *webS
 	active.entries = append(active.entries, Entry{Role: "player", Text: message})
 	processed, err := active.game.Runtime.ProcessTurn(r.Context(), message)
 	if err != nil {
-		active.entries = append(active.entries, Entry{Role: "kaya", Text: "The signal broke up. I did not understand that."})
+		active.entries = append(active.entries, Entry{Role: "kaya", Text: "Kaya: The signal broke up. I did not understand that."})
 		writeState(w, active)
 		return
 	}

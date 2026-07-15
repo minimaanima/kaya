@@ -163,7 +163,7 @@ func TestTurnHidesRuntimeErrorsAndKeepsSessionUsable(t *testing.T) {
 	}
 	state := decodeState(t, response)
 	got := state.Entries[len(state.Entries)-1]
-	want := transcriptEntry{Role: "kaya", Text: "The signal broke up. I did not understand that."}
+	want := transcriptEntry{Role: "kaya", Text: "Kaya: The signal broke up. I did not understand that."}
 	if got != want {
 		t.Fatalf("last entry = %#v, want %#v", got, want)
 	}
