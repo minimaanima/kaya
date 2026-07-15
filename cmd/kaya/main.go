@@ -35,9 +35,12 @@ import (
 )
 
 const (
-	defaultOllamaModel = "qwen3.5:4b"
-	defaultWebAddress  = "127.0.0.1:8080"
-	webUsage           = "usage: kaya web [--addr <host:port>]"
+	defaultOllamaModel   = "qwen3.5:4b"
+	defaultWebAddress    = "127.0.0.1:8080"
+	webUsage             = "usage: kaya web [--addr <host:port>]"
+	webReadHeaderTimeout = 10 * time.Second
+	webReadTimeout       = 15 * time.Second
+	webIdleTimeout       = 60 * time.Second
 )
 
 func main() {
@@ -172,17 +175,28 @@ func runWebWithEnvironment(args []string, lookupEnvironment func(string) string)
 		return err
 	}
 
-	httpServer := &http.Server{
-		Addr:              options.Address,
-		Handler:           console.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-	fmt.Fprintf(os.Stdout, "Kaya web console listening at http://%s\n", options.Address)
-	fmt.Fprintf(os.Stdout, "Expose it with: ngrok http %s\n", options.Port)
+	httpServer := newWebHTTPServer(options, console.Handler())
+	writeWebStartup(os.Stdout, options)
 	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
+}
+
+func newWebHTTPServer(options webOptions, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              options.Address,
+		Handler:           handler,
+		ReadHeaderTimeout: webReadHeaderTimeout,
+		ReadTimeout:       webReadTimeout,
+		IdleTimeout:       webIdleTimeout,
+	}
+}
+
+func writeWebStartup(output io.Writer, options webOptions) {
+	fmt.Fprintf(output, "Kaya web console is listening locally at http://%s (Ngrok backend only).\n", options.Address)
+	fmt.Fprintf(output, "Expose it with: ngrok http %s\n", options.Port)
+	fmt.Fprintln(output, "On your phone, open the HTTPS Ngrok URL that command provides.")
 }
 
 func runPlayConsole(ctx context.Context, input io.Reader, output io.Writer, state *world.State, parser session.SemanticParser, composer session.Composer, parseLog bool) error {

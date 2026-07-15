@@ -7,12 +7,15 @@ import (
 	"errors"
 	"io"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"kaya/internal/game"
 	"kaya/internal/grounding"
@@ -328,6 +331,48 @@ func TestRunWebWithEnvironmentRejectsMissingPasswordBeforeOllamaOrListening(t *t
 	}
 	if !reflect.DeepEqual(lookedUp, []string{"KAYA_WEB_PASSWORD"}) {
 		t.Fatalf("environment lookups = %v, want password lookup before Ollama or listening", lookedUp)
+	}
+}
+
+func TestNewWebHTTPServerConfiguresBoundedReadTimeouts(t *testing.T) {
+	called := false
+	server := newWebHTTPServer(webOptions{Address: "127.0.0.1:8080", Port: "8080"}, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		called = true
+	}))
+
+	if server.Addr != "127.0.0.1:8080" {
+		t.Fatalf("address = %q, want configured address", server.Addr)
+	}
+	if server.ReadHeaderTimeout != 10*time.Second {
+		t.Fatalf("ReadHeaderTimeout = %s, want 10s", server.ReadHeaderTimeout)
+	}
+	if server.ReadTimeout != 15*time.Second {
+		t.Fatalf("ReadTimeout = %s, want 15s", server.ReadTimeout)
+	}
+	if server.IdleTimeout != 60*time.Second {
+		t.Fatalf("IdleTimeout = %s, want 60s", server.IdleTimeout)
+	}
+	if server.WriteTimeout != 0 {
+		t.Fatalf("WriteTimeout = %s, want unset for slow Ollama turns", server.WriteTimeout)
+	}
+	server.Handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	if !called {
+		t.Fatal("server did not preserve the provided handler")
+	}
+}
+
+func TestWriteWebStartupDirectsPhoneUsersToHTTPSNgrokURL(t *testing.T) {
+	var output strings.Builder
+	writeWebStartup(&output, webOptions{Address: "127.0.0.1:8080", Port: "8080"})
+
+	for _, want := range []string{
+		"Ngrok backend only",
+		"ngrok http 8080",
+		"open the HTTPS Ngrok URL",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("startup output %q missing %q", output.String(), want)
+		}
 	}
 }
 
