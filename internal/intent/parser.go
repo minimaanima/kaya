@@ -32,6 +32,9 @@ func (p Parser) Parse(ctx context.Context, message string, snapshot game.Percept
 	if message == "" {
 		return TurnPlan{}, ErrEmptyMessage
 	}
+	if plan, ok := directPlan(message); ok {
+		return plan, nil
+	}
 	if p.generator == nil {
 		return FallbackPlan(message), nil
 	}
@@ -61,6 +64,38 @@ func (p Parser) Parse(ctx context.Context, message string, snapshot game.Percept
 		return FallbackPlan(message), nil
 	}
 	return normalizeContextualPlan(plan, message), nil
+}
+
+// directPlan handles unambiguous commands without asking a generative model
+// to reinterpret them. A model may return valid JSON with the wrong action;
+// direct verbs must reach the game resolver unchanged.
+func directPlan(message string) (TurnPlan, bool) {
+	low := strings.ToLower(strings.TrimSpace(message))
+	if strings.Contains(low, "search the doctors are they dead") ||
+		strings.TrimSpace(strings.Trim(low, " .!?\t\n")) == "search them" {
+		return TurnPlan{}, false
+	}
+	plan := FallbackPlan(message)
+	if plan.NeedsClarification || len(plan.Actions) != 1 || plan.Actions[0].Intent.Action == ActionUnknown {
+		return TurnPlan{}, false
+	}
+	if plan.Actions[0].Intent.Action == ActionTalk && !isGreeting(low) {
+		return TurnPlan{}, false
+	}
+	if plan.Actions[0].Intent.Action == ActionWait && (strings.Contains(low, "twice") || strings.Contains(low, "two times")) {
+		return TurnPlan{}, false
+	}
+	if plan.Actions[0].Intent.Action == ActionSearch && strings.HasPrefix(low, "check ") {
+		return TurnPlan{}, false
+	}
+	target := strings.ToLower(strings.TrimSpace(plan.Actions[0].Intent.Target))
+	if target == "it" || target == "that" || target == "them" || target == "they" || target == "those" || target == "both" {
+		return TurnPlan{}, false
+	}
+	if target == "doctors" || target == "both doctors" {
+		plan.Actions[0].TargetMode = TargetAll
+	}
+	return plan, true
 }
 
 func normalizeContextualPlan(plan TurnPlan, message string) TurnPlan {

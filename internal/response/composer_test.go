@@ -84,6 +84,25 @@ func TestComposerAcceptsNaturalGrammarAroundApprovedFacts(t *testing.T) {
 	}
 }
 
+func TestComposerAcceptsNarratorVoice(t *testing.T) {
+	gen := &fakeGenerator{raw: `{"sentences":[{"factIds":["f001","f002"],"text":"Kaya, I hear you. The doctor is dead."}]}`}
+	got := NewComposer(gen).Compose(context.Background(), doctorBundle())
+	if got.UsedFallback {
+		t.Fatalf("response = %#v", got)
+	}
+}
+
+func TestComposerAcceptsPunctuationSeparatedObjectNames(t *testing.T) {
+	bundle := turn.FactBundle{Facts: []game.Fact{
+		{ID: "f001", Subject: "reception", Text: "I can see: Reception Desk, Reception Floor, Collapsed Chair.", Required: true},
+	}}
+	gen := &fakeGenerator{raw: `{"sentences":[{"factIds":["f001"],"text":"I see the Reception Desk, Reception Floor, and Collapsed Chair."}]}`}
+	got := NewComposer(gen).Compose(context.Background(), bundle)
+	if got.UsedFallback {
+		t.Fatalf("response = %#v", got)
+	}
+}
+
 func TestComposerFallsBackOnGeneratorError(t *testing.T) {
 	gen := &fakeGenerator{err: errors.New("offline")}
 	got := NewComposer(gen).Compose(context.Background(), doctorBundle())

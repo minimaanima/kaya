@@ -48,6 +48,37 @@ func TestParserParsesPluralCompoundTurn(t *testing.T) {
 	}
 }
 
+func TestParserUsesDeterministicPlanForDirectCommands(t *testing.T) {
+	badModelPlan := `{"actions":[{"intent":{"action":"explore","target":"desk","item":"","direction":"","modifiers":[],"confidence":0.95,"rawText":"wrong","needsClarification":false,"clarificationQuestion":""},"targetMode":"all"}],"questions":[],"confidence":0.95,"needsClarification":false,"clarificationQuestion":"","rawText":"wrong"}`
+	tests := []struct {
+		message string
+		action  Action
+		target  string
+	}{
+		{message: "search the desk", action: ActionSearch, target: "desk"},
+		{message: "whats on the reception floor", action: ActionInspect, target: "reception floor"},
+		{message: "search the Reception Desk", action: ActionSearch, target: "reception desk"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.message, func(t *testing.T) {
+			generator := &fakeGenerator{responses: []string{badModelPlan}}
+			plan, err := NewParser(generator).Parse(context.Background(), tt.message, game.PerceptionSnapshot{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if generator.calls != 0 {
+				t.Fatalf("model calls = %d, want direct command bypass", generator.calls)
+			}
+			if len(plan.Actions) != 1 || plan.Actions[0].Intent.Action != tt.action {
+				t.Fatalf("plan = %#v", plan)
+			}
+			if got := plan.Actions[0].Intent.Target; got != tt.target {
+				t.Fatalf("target = %q, want %q", got, tt.target)
+			}
+		})
+	}
+}
+
 func TestFallbackPlanExploresWalls(t *testing.T) {
 	plan := FallbackPlan("feel along the walls for another exit")
 	if len(plan.Actions) != 1 || plan.Actions[0].Intent.Action != ActionExplore {

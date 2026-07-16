@@ -17,6 +17,8 @@ func FallbackPlan(message string) TurnPlan {
 		intent.Action, intent.Item, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionTurnOff, "flashlight", 0.9, false, ""
 	case isMovementMessage(low):
 		intent.Action, intent.Direction, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionMove, movementDirection(low), 0.8, false, ""
+	case isGreeting(low):
+		intent.Action, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionTalk, 0.9, false, ""
 	case isFallbackInventoryQuestion(low):
 		intent.Action, intent.Confidence, intent.NeedsClarification, intent.ClarificationQuestion = ActionTalk, 0.8, false, ""
 		if item := fallbackInventoryItem(low); item != "" {
@@ -57,8 +59,8 @@ func fallbackInventoryItem(message string) string {
 }
 
 func isObjectInspectMessage(message string) bool {
-	return strings.Contains(message, "what is on ") || strings.Contains(message, "what's on ") ||
-		strings.Contains(message, "what is in ") || strings.Contains(message, "what's in ") ||
+	return strings.Contains(message, "what is on ") || strings.Contains(message, "what's on ") || strings.Contains(message, "whats on ") ||
+		strings.Contains(message, "what is in ") || strings.Contains(message, "what's in ") || strings.Contains(message, "whats in ") ||
 		strings.Contains(message, "inspect ") || strings.Contains(message, "look at ")
 }
 
@@ -67,7 +69,7 @@ func extractSearchTarget(message string) string {
 }
 
 func extractObjectTarget(message string) string {
-	return extractTarget(message, []string{"what is on", "what's on", "what is in", "what's in", "inspect", "look at"})
+	return extractTarget(message, []string{"what is on", "what's on", "whats on", "what is in", "what's in", "whats in", "inspect", "look at"})
 }
 
 func extractTakeTarget(message string) string {
@@ -119,6 +121,15 @@ func isMovementMessage(message string) bool {
 		}
 	}
 	return false
+}
+
+func isGreeting(message string) bool {
+	switch strings.TrimSpace(message) {
+	case "hi", "hello", "hey", "yo":
+		return true
+	default:
+		return false
+	}
 }
 
 func movementDirection(message string) string {

@@ -22,9 +22,9 @@ var safeVoiceLexicon = func() map[string]bool {
 	words := strings.Fields(`a an the i me my we our you your it its this that these those they them their
 	here there’s there's now i'm i've they're they're
 is are was were be been being am can cannot could should
-	no not yes and or but if then as so very still only just all both one first second
+	no not yes and or but if then as so very still only just all both one two three four five six seven eight nine ten first second
 	in on at by near beside next to from into of for with without around through inside outside
-	to feel along seconds second minute minutes`)
+	to feel along hear see view includes has have passed passes while observed since began looking exit scene kaya seconds second minute minutes`)
 	lexicon := make(map[string]bool, len(words))
 	for _, word := range words {
 		lexicon[word] = true
@@ -90,7 +90,8 @@ func validateDraft(raw string, bundle turn.FactBundle) (ResponseDraft, string) {
 }
 
 func hasUnknownEntity(draft ResponseDraft, bundle turn.FactBundle) bool {
-	approved := make([]string, 0, len(bundle.Facts)*3)
+	approved := make([]string, 0, len(bundle.Facts)*3+2)
+	approved = append(approved, "Kaya", "Dr. Kaya")
 	for _, fact := range bundle.Facts {
 		approved = append(approved, fact.Subject, fact.Value, fact.Text)
 	}
@@ -124,16 +125,47 @@ func hasUnsupportedClaim(draft ResponseDraft, bundle turn.FactBundle) bool {
 }
 
 func approvedEntity(candidate string, approved []string) bool {
-	candidate = strings.ToLower(strings.Join(strings.Fields(candidate), " "))
-	for _, field := range approved {
-		field = strings.ToLower(strings.Join(strings.Fields(field), " "))
-		if strings.Contains(" "+field+" ", " "+candidate+" ") {
-			return true
+	candidateTokens := entityTokens(candidate)
+	if len(candidateTokens) == 0 {
+		return false
+	}
+	candidates := [][]string{candidateTokens}
+	if len(candidateTokens) > 1 {
+		switch candidateTokens[0] {
+		case "the", "a", "an":
+			candidates = append(candidates, candidateTokens[1:])
 		}
-		for _, article := range []string{"the ", "a ", "an "} {
-			if strings.HasPrefix(candidate, article) && strings.Contains(" "+field+" ", " "+strings.TrimPrefix(candidate, article)+" ") {
+	}
+	for _, field := range approved {
+		fieldTokens := entityTokens(field)
+		for _, want := range candidates {
+			if phraseContained(fieldTokens, want) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func entityTokens(value string) []string {
+	raw := claimTokenPattern.FindAllString(strings.ToLower(value), -1)
+	return append([]string(nil), raw...)
+}
+
+func phraseContained(field, want []string) bool {
+	if len(want) == 0 || len(want) > len(field) {
+		return false
+	}
+	for start := 0; start+len(want) <= len(field); start++ {
+		match := true
+		for i := range want {
+			if field[start+i] != want[i] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
 		}
 	}
 	return false
