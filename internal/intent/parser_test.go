@@ -13,6 +13,9 @@ type fakeGenerator struct {
 	responses []string
 	err       error
 	calls     int
+	system    string
+	prompt    string
+	schema    any
 }
 
 func (f *fakeGenerator) Generate(ctx context.Context, systemPrompt string, userPrompt string) (string, error) {
@@ -29,14 +32,43 @@ func (f *fakeGenerator) Generate(ctx context.Context, systemPrompt string, userP
 }
 
 func (f *fakeGenerator) GenerateJSON(ctx context.Context, systemPrompt, userPrompt string, schema any) (string, error) {
+	f.system = systemPrompt
+	f.prompt = userPrompt
+	f.schema = schema
 	return f.Generate(ctx, systemPrompt, userPrompt)
+}
+
+func TestParserRequestsCompactPlanWithActionCatalog(t *testing.T) {
+	generator := &fakeGenerator{responses: []string{`{"actions":[{"action":"take_item","target":"Flashlight","item":"","direction":"","targetMode":"single"},{"action":"move","target":"","item":"","direction":"east","targetMode":"single"}],"questions":[],"needsClarification":false,"clarificationQuestion":""}`}}
+	plan, err := NewParser(generator).Parse(context.Background(), "take the flashlight and go east", game.PerceptionSnapshot{
+		VisibleObjects: []game.PerceivedObject{{ID: "reception_desk", Name: "Collapsed Chair"}},
+		KnownExits:     []game.PerceivedExit{{Direction: "east"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generator.calls != 1 {
+		t.Fatalf("model calls = %d, want 1", generator.calls)
+	}
+	if !strings.Contains(generator.prompt, `"availableActions"`) {
+		t.Fatalf("prompt missing availableActions: %s", generator.prompt)
+	}
+	if strings.Contains(generator.prompt, "reception_desk") {
+		t.Fatalf("prompt leaked internal object id: %s", generator.prompt)
+	}
+	if len(plan.Actions) != 2 || plan.Actions[0].Intent.Action != ActionTakeItem || plan.Actions[1].Intent.Action != ActionMove {
+		t.Fatalf("plan = %#v", plan)
+	}
+	if plan.Actions[0].Intent.Target != "Flashlight" || plan.Actions[1].Intent.Direction != "east" {
+		t.Fatalf("plan = %#v", plan)
+	}
 }
 
 func TestParserParsesPluralCompoundTurn(t *testing.T) {
 	generator := &fakeGenerator{responses: []string{`{
-		"actions":[{"intent":{"action":"search","target":"doctors","item":"","direction":"","modifiers":[],"confidence":0.96,"rawText":"search the doctors","needsClarification":false,"clarificationQuestion":""},"targetMode":"all"}],
-		"questions":[{"kind":"life_status","target":"they","targetMode":"all"}],
-		"confidence":0.96,"needsClarification":false,"clarificationQuestion":"","rawText":"search the doctors are they dead"
+		"actions":[{"action":"search","target":"doctors","item":"","direction":"","targetMode":"all"}],
+		"questions":[{"kind":"life_status","target":"doctors","targetMode":"all"}],
+		"needsClarification":false,"clarificationQuestion":""
 	}`}}
 	parser := NewParser(generator)
 	plan, err := parser.Parse(context.Background(), "search the doctors are they dead", game.PerceptionSnapshot{})
@@ -48,34 +80,14 @@ func TestParserParsesPluralCompoundTurn(t *testing.T) {
 	}
 }
 
-func TestParserUsesDeterministicPlanForDirectCommands(t *testing.T) {
-	badModelPlan := `{"actions":[{"intent":{"action":"explore","target":"desk","item":"","direction":"","modifiers":[],"confidence":0.95,"rawText":"wrong","needsClarification":false,"clarificationQuestion":""},"targetMode":"all"}],"questions":[],"confidence":0.95,"needsClarification":false,"clarificationQuestion":"","rawText":"wrong"}`
-	tests := []struct {
-		message string
-		action  Action
-		target  string
-	}{
-		{message: "search the desk", action: ActionSearch, target: "desk"},
-		{message: "whats on the reception floor", action: ActionInspect, target: "reception floor"},
-		{message: "search the Reception Desk", action: ActionSearch, target: "reception desk"},
+func TestParserUsesModelForDirectCommands(t *testing.T) {
+	generator := &fakeGenerator{responses: []string{`{"actions":[{"action":"search","target":"Reception Desk","item":"","direction":"","targetMode":"single"}],"questions":[],"needsClarification":false,"clarificationQuestion":""}`}}
+	plan, err := NewParser(generator).Parse(context.Background(), "search the desk", game.PerceptionSnapshot{})
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.message, func(t *testing.T) {
-			generator := &fakeGenerator{responses: []string{badModelPlan}}
-			plan, err := NewParser(generator).Parse(context.Background(), tt.message, game.PerceptionSnapshot{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if generator.calls != 0 {
-				t.Fatalf("model calls = %d, want direct command bypass", generator.calls)
-			}
-			if len(plan.Actions) != 1 || plan.Actions[0].Intent.Action != tt.action {
-				t.Fatalf("plan = %#v", plan)
-			}
-			if got := plan.Actions[0].Intent.Target; got != tt.target {
-				t.Fatalf("target = %q, want %q", got, tt.target)
-			}
-		})
+	if generator.calls != 1 || len(plan.Actions) != 1 || plan.Actions[0].Intent.Action != ActionSearch {
+		t.Fatalf("calls=%d plan=%#v", generator.calls, plan)
 	}
 }
 
@@ -128,37 +140,8 @@ func TestFallbackPlanRoutesInventoryQuestionsToTalk(t *testing.T) {
 	}
 }
 
-func TestParserNormalizesApprovedContextualPhrases(t *testing.T) {
-	valid := func(raw string) string {
-		return `{"actions":[{"intent":{"action":"explore","target":"","item":"","direction":"","modifiers":[],"confidence":0.9,"rawText":"` + raw + `","needsClarification":false,"clarificationQuestion":""},"targetMode":"single"}],"questions":[],"confidence":0.9,"needsClarification":false,"clarificationQuestion":"","rawText":"` + raw + `"}`
-	}
-	tests := []struct {
-		name string
-		msg  string
-		want Action
-	}{
-		{name: "singular doctor", msg: "inspect the doctor", want: ActionInspect},
-		{name: "both doctors", msg: "inspect both doctors", want: ActionInspect},
-		{name: "them", msg: "search them", want: ActionSearch},
-		{name: "compound", msg: "search the doctors are they dead", want: ActionSearch},
-		{name: "walls", msg: "feel along the walls for another exit", want: ActionExplore},
-		{name: "cabinet typo", msg: "what is isnide the storage cabiner", want: ActionInspect},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			plan, err := NewParser(&fakeGenerator{responses: []string{valid(tt.msg)}}).Parse(context.Background(), tt.msg, game.PerceptionSnapshot{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(plan.Actions) != 1 || plan.Actions[0].Intent.Action != tt.want {
-				t.Fatalf("plan = %#v", plan)
-			}
-		})
-	}
-}
-
 func TestParserNormalizesPluralDoctorTargetAsAll(t *testing.T) {
-	raw := `{"actions":[{"intent":{"action":"inspect","target":"doctors","item":"","direction":"","modifiers":[],"confidence":0.9,"rawText":"inspect the doctors","needsClarification":false,"clarificationQuestion":""},"targetMode":"single"}],"questions":[],"confidence":0.9,"needsClarification":false,"clarificationQuestion":"","rawText":"inspect the doctors"}`
+	raw := `{"actions":[{"action":"inspect","target":"doctors","item":"","direction":"","targetMode":"all"}],"questions":[],"needsClarification":false,"clarificationQuestion":""}`
 	plan, err := NewParser(&fakeGenerator{responses: []string{raw}}).Parse(context.Background(), "inspect the doctors", game.PerceptionSnapshot{})
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +152,7 @@ func TestParserNormalizesPluralDoctorTargetAsAll(t *testing.T) {
 }
 
 func TestParserPreservesRepeatedGenericActions(t *testing.T) {
-	raw := `{"actions":[{"intent":{"action":"wait","target":"","item":"","direction":"","modifiers":[],"confidence":0.9,"rawText":"wait twice","needsClarification":false,"clarificationQuestion":""},"targetMode":"single"},{"intent":{"action":"wait","target":"","item":"","direction":"","modifiers":[],"confidence":0.9,"rawText":"wait twice","needsClarification":false,"clarificationQuestion":""},"targetMode":"single"}],"questions":[],"confidence":0.9,"needsClarification":false,"clarificationQuestion":"","rawText":"wait twice"}`
+	raw := `{"actions":[{"action":"wait","target":"","item":"","direction":"","targetMode":"single"},{"action":"wait","target":"","item":"","direction":"","targetMode":"single"}],"questions":[],"needsClarification":false,"clarificationQuestion":""}`
 	plan, err := NewParser(&fakeGenerator{responses: []string{raw}}).Parse(context.Background(), "wait twice", game.PerceptionSnapshot{})
 	if err != nil {
 		t.Fatal(err)
@@ -180,7 +163,7 @@ func TestParserPreservesRepeatedGenericActions(t *testing.T) {
 }
 
 func TestParserNormalizesUnsupportedQuestionToClarification(t *testing.T) {
-	raw := `{"actions":[{"intent":{"action":"search","target":"room","item":"","direction":"","modifiers":[],"confidence":0.9,"rawText":"do they have anything","needsClarification":false,"clarificationQuestion":""},"targetMode":"all"}],"questions":[],"confidence":0.9,"needsClarification":false,"clarificationQuestion":"","rawText":"do they have anything"}`
+	raw := `{"actions":[],"questions":[],"needsClarification":true,"clarificationQuestion":"What do you want Kaya to do?"}`
 	plan, err := NewParser(&fakeGenerator{responses: []string{raw}}).Parse(context.Background(), "do they have anything", game.PerceptionSnapshot{})
 	if err != nil {
 		t.Fatal(err)
@@ -243,7 +226,7 @@ const fiveActionPlanJSON = `{
 }`
 
 func TestParserParseValidIntent(t *testing.T) {
-	generator := &fakeGenerator{responses: []string{`{"actions":[{"intent":{"action":"search","target":"dead doctor coat pockets","item":"flashlight","direction":"","modifiers":["carefully","keep_light_low"],"confidence":0.93,"rawText":"check the pockets","needsClarification":false,"clarificationQuestion":""},"targetMode":"single"}],"questions":[],"confidence":0.93,"needsClarification":false,"clarificationQuestion":"","rawText":"check the pockets"}`}}
+	generator := &fakeGenerator{responses: []string{`{"actions":[{"action":"search","target":"dead doctor coat pockets","item":"flashlight","direction":"","targetMode":"single"}],"questions":[],"needsClarification":false,"clarificationQuestion":""}`}}
 
 	parser := NewParser(generator)
 	got, err := parser.Parse(context.Background(), "check the pockets", game.PerceptionSnapshot{})
@@ -265,7 +248,7 @@ func TestParserParseValidIntent(t *testing.T) {
 func TestParserRepairsInvalidJSON(t *testing.T) {
 	generator := &fakeGenerator{responses: []string{
 		`not json`,
-		`{"actions":[{"intent":{"action":"unknown","target":"","item":"","direction":"","modifiers":[],"confidence":0.18,"rawText":"Do it.","needsClarification":true,"clarificationQuestion":"What do you want Kaya to do?"},"targetMode":"single"}],"questions":[],"confidence":0.18,"needsClarification":true,"clarificationQuestion":"What do you want Kaya to do?","rawText":"Do it."}`,
+		`{"actions":[],"questions":[],"needsClarification":true,"clarificationQuestion":"What do you want Kaya to do?"}`,
 	}}
 
 	parser := NewParser(generator)

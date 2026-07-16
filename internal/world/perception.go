@@ -30,6 +30,7 @@ func (s *State) PerceptionSnapshot() (game.PerceptionSnapshot, error) {
 		VisibleObjects:  make([]game.PerceivedObject, 0, len(objects)),
 		KnownExits:      make([]game.PerceivedExit, 0, len(exits)),
 		Inventory:       make([]game.PerceivedItem, 0, len(s.Inventory)),
+		KnownItems:      make([]game.PerceivedItem, 0, len(s.DiscoveredItems)),
 		RecentReferents: s.perceivedReferents(objects),
 	}
 	for _, object := range objects {
@@ -54,6 +55,23 @@ func (s *State) PerceptionSnapshot() (game.PerceptionSnapshot, error) {
 			continue
 		}
 		snapshot.Inventory = append(snapshot.Inventory, game.PerceivedItem{
+			ID: item.ID, Name: item.Name, Aliases: append([]string(nil), item.Aliases...),
+		})
+	}
+
+	knownItemIDs := make([]game.ItemID, 0, len(s.DiscoveredItems))
+	for itemID, discovered := range s.DiscoveredItems {
+		if discovered {
+			knownItemIDs = append(knownItemIDs, itemID)
+		}
+	}
+	sort.Slice(knownItemIDs, func(i, j int) bool { return knownItemIDs[i] < knownItemIDs[j] })
+	for _, itemID := range knownItemIDs {
+		item, ok := s.Items[itemID]
+		if !ok {
+			continue
+		}
+		snapshot.KnownItems = append(snapshot.KnownItems, game.PerceivedItem{
 			ID: item.ID, Name: item.Name, Aliases: append([]string(nil), item.Aliases...),
 		})
 	}

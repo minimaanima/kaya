@@ -53,5 +53,6 @@ type PerceptionSnapshot struct {
 	VisibleObjects  []PerceivedObject `json:"visibleObjects"`
 	KnownExits      []PerceivedExit   `json:"knownExits"`
 	Inventory       []PerceivedItem   `json:"inventory"`
+	KnownItems      []PerceivedItem   `json:"knownItems"`
 	RecentReferents []ReferentGroup   `json:"recentReferents"`
 }

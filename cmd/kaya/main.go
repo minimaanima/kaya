@@ -151,7 +151,7 @@ func runPlay(args []string) error {
 			fmt.Printf("[time +%ds]\n", elapsed)
 		}
 		fmt.Println("Kaya:", processed.Response.Text)
-		if processed.Response.UsedFallback {
+		if processed.Response.UsedFallback && os.Getenv("KAYA_DEBUG") == "1" {
 			fmt.Println("debug:", processed.Response.FallbackReason)
 		}
 		if state.CurrentRoomID == scenario.RoomStairwell {

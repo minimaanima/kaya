@@ -138,8 +138,8 @@ func (f *fakePlaytestGenerator) GenerateJSON(ctx context.Context, systemPrompt s
 
 func TestRunPlaytestScriptMarksExpectedActionMismatchSuspicious(t *testing.T) {
 	parser := intent.NewParser(&fakePlaytestGenerator{responses: []string{`{
-		"actions": [{"intent": {"action": "inspect", "target": "", "item": "", "direction": "", "modifiers": [], "confidence": 0.9, "rawText": "what's in your bag", "needsClarification": false, "clarificationQuestion": ""}, "targetMode": "single"}],
-		"questions": [], "confidence": 0.9, "needsClarification": false, "clarificationQuestion": "", "rawText": "what's in your bag"
+		"actions": [{"action": "inspect", "target": "", "item": "", "direction": "", "targetMode": "single"}],
+		"questions": [], "needsClarification": false, "clarificationQuestion": ""
 	}`}})
 	script := playtestScript{
 		Name: "intent collision",

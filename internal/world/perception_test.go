@@ -101,6 +101,9 @@ func TestPerceptionSnapshotFiltersHiddenStaleAndUndiscoveredReferents(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(snapshot.KnownItems) != 1 || snapshot.KnownItems[0].ID != scenario.ItemFlashlight {
+		t.Fatalf("known items = %#v", snapshot.KnownItems)
+	}
 	if got := snapshot.RecentReferents[0].ObjectIDs; len(got) != 1 || got[0] != scenario.ObjectReceptionDesk {
 		t.Fatalf("object referents = %#v", got)
 	}

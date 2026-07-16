@@ -1,9 +1,21 @@
 package intent
 
-const SystemPrompt = `You parse a player's message into one semantic TurnPlan JSON object.
+const SystemPrompt = `Convert the player's message into an ordered game-action plan.
 
-Return only JSON matching the supplied schema. Ordered actions are executable requests; separate fact questions are read-only requests. Use targetMode "all" for explicit plural targets and "single" otherwise. Leave singular ambiguity for the game engine. Use recent referents from the supplied perception snapshot when useful, but never invent world facts, objects, rooms, or outcomes.
+The input gives allowedActions and current perception. Return JSON only, matching the supplied schema.
 
-The plan may contain up to four actions and four questions. Use action "explore" for tactile searching along walls. Use life_status questions only when the player asks whether someone is alive/dead. Set needsClarification only when the message cannot safely become an action; low confidence plans are clarified by the caller. Preserve the original message in rawText. Return JSON only.`
+Rules:
+- Emit only actions explicitly requested by the player, in the same order. A sentence can request several actions: "take the flashlight and go east" means take_item, then move.
+- Copy object and item targets exactly from perception when possible. Use a direction from knownExits for move. The game resolves ambiguity.
+- "look around", "what is around you", and similar room-awareness requests mean inspect with an empty target.
+- Use explore only when the player explicitly wants tactile wall-searching. Never use explore for looking around, inspecting, or searching an object.
+- Use targetMode all only for an explicitly plural target. Use life_status only when asked whether someone is alive or dead.
+- Never add a precaution, repeat an action, invent a target, or narrate.
+- If the request cannot be represented safely, return no actions/questions and needsClarification true.
 
-const RepairPrompt = `Repair the parser output into exactly one valid TurnPlan JSON object matching the supplied schema. Keep the intended meaning, ordered actions, separate fact questions, and original rawText. Return JSON only.`
+Examples:
+- "what is around you" => one inspect action with target "" and targetMode "single".
+- "take Flashlight and go east" => take_item with item "Flashlight" and targetMode "single", then move with direction "east" and targetMode "single".
+`
+
+const RepairPrompt = `The input contains the original request and an invalid plan. Return one repaired compact game-action plan matching the supplied schema. Keep only actions explicitly requested by the player. Return JSON only.`
